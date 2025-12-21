@@ -88,7 +88,7 @@ with tab_explore:
         # Check if we have data for this date
         session = get_db_session()
         view_dt = datetime.combine(view_date, datetime.min.time())
-        status_rec = session.query(DailySyncStatus).get(view_dt)
+        status_rec = session.get(DailySyncStatus, view_dt)
         
         if status_rec:
             st.success(f"**Status:** {status_rec.status}")
@@ -158,7 +158,8 @@ with tab_explore:
                     crew_list = []
                     for row in assoc_rows:
                         # Get member details
-                        cm = session.query(CrewMember).get(row.crew_id)
+                        # cm = session.query(CrewMember).get(row.crew_id)
+                        cm = session.get(CrewMember, row.crew_id)
                         crew_list.append({
                             "Role": row.role,
                             "Name": cm.name,
