@@ -13,7 +13,7 @@ fi
 source "$VENV_NAME/bin/activate"
 
 # 3. Check Dependencies in Venv
-if ! python3 -c "import streamlit" &> /dev/null; then
+if ! python3 -c "import streamlit; import firebase_admin" &> /dev/null; then
     echo "Installing dependencies into virtual environment..."
     pip install --upgrade pip
     pip install -r requirements.txt

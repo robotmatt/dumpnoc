@@ -1,32 +1,32 @@
 @echo off
-set VENV_NAME=venv
+setlocal EnableDelayedExpansion
 
-:: 1. Check/Create Venv
-if not exist %VENV_NAME% (
-    echo Creating virtual environment '%VENV_NAME%'...
-    python -m venv %VENV_NAME%
+:: 0. Find a working Python command
+set PY_CMD=python
+py --version >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    set PY_CMD=py
 )
+echo [INFO] Using Python command: !PY_CMD!
 
-:: 2. Activate Venv
-call %VENV_NAME%\Scripts\activate
-
-:: 3. Check Dependencies in Venv
-python -c "import streamlit" >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo Installing dependencies into virtual environment...
-    python -m pip install --upgrade pip
-    pip install -r requirements.txt
-    playwright install
+:: 1. Check/Install Dependencies
+echo [INFO] Checking dependencies...
+!PY_CMD! -c "import streamlit; import firebase_admin; import sqlalchemy; import pandas; import playwright; import bs4; import google.cloud.firestore" >nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo [INFO] Installing missing dependencies globally...
+    !PY_CMD! -m pip install --upgrade pip
+    !PY_CMD! -m pip install -r requirements.txt
+    !PY_CMD! -m playwright install
 ) else (
-    echo Dependencies already installed.
+    echo [INFO] Dependencies are already installed.
 )
 
-:: 4. Ingest data (optional)
+:: 2. Ingest data (optional)
 set /p ingest_choice="Ingest pairing and IOE data now? (y/n): "
-if /i "%ingest_choice%"=="y" (
-    python ingest_data.py
+if /i "!ingest_choice!"=="y" (
+    !PY_CMD! ingest_data.py
 )
 
-:: 5. Run App
-echo Starting NOC Mobile Scraper...
-streamlit run app.py
+:: 3. Run Streamlit App
+echo [INFO] Starting NOC Mobile Scraper...
+!PY_CMD! -m streamlit run app.py

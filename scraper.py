@@ -1,5 +1,15 @@
-import time
+import os
+import asyncio
 from datetime import datetime, timedelta
+
+# Fix for Playwright/asyncio on Windows (especially Python 3.8+)
+if os.name == 'nt':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except AttributeError:
+        # Fallback for environments where this isn't available
+        pass
+
 from playwright.sync_api import sync_playwright, TimeoutError
 from bs4 import BeautifulSoup
 from config import LOGIN_URL, STATION_OPS_URL
@@ -131,7 +141,7 @@ class NOCScraper:
     def _update_sync_status(self, date_obj):
         try:
             date_key = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-            sync_status = self.session.query(DailySyncStatus).get(date_key)
+            sync_status = self.session.get(DailySyncStatus, date_key)
             if not sync_status:
                 sync_status = DailySyncStatus(date=date_key)
                 self.session.add(sync_status)
@@ -142,14 +152,41 @@ class NOCScraper:
             sync_status.flights_found = count
             sync_status.status = "Success"
             self.session.commit()
-            print(f"Sync status updated for {date_key}")
+            
+            # Update Global Metadata
+            from database import set_metadata
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            set_metadata(self.session, "last_successful_sync", now_str)
+            
+            # Sync to Firestore if enabled
+            from config import ENABLE_CLOUD_SYNC
+            from firestore_lib import is_cloud_sync_enabled
+            if is_cloud_sync_enabled():
+                from firestore_lib import upload_metadata
+                upload_metadata("last_successful_sync", now_str)
+                
+                # Auto-upload the flights for this specific day
+                from ingest_data import upload_flights_to_cloud
+                # scraper's session is already open
+                upload_flights_to_cloud(self.session, start_date=date_key, end_date=date_key)
+            
+            print(f"Sync status and global metadata updated for {date_key}")
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
     def parse_and_save(self, html_content, date_obj, mode="UTC"):
         soup = BeautifulSoup(html_content, 'html.parser')
-        list_items = soup.find_all("div", class_="ListItem")
-        print(f"  Parsng {len(list_items)} flights ({mode})...")
+        
+        # We only need Departures (MasterMain_panelUpper)
+        # Avoids duplicate flights that appear in both Departures (today) and Arrivals (tomorrow)
+        departure_panel = soup.find("div", id="MasterMain_panelUpper")
+        if departure_panel:
+            list_items = departure_panel.find_all("div", class_="ListItem")
+        else:
+            # Fallback to all list items if panel ID not found
+            list_items = soup.find_all("div", class_="ListItem")
+            
+        print(f"  Parsing {len(list_items)} flights from Departures ({mode})...")
         
         for item in list_items:
             try:
