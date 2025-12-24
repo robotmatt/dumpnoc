@@ -110,17 +110,17 @@ class NOCScraper:
             self.page.press("#MasterMain_tbDate_DateFieldTextBox", "Tab")
             
             # --- PASS 1: UTC ---
-            print("  [Pass 1] Switching to UTC...")
-            self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="UTC")
-            self.page.click("#MasterMain_btnSearch")
-            self.page.wait_for_load_state("networkidle")
-            self.page.wait_for_timeout(3000) # Safety
+            # print("  [Pass 1] Switching to UTC...")
+            # self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="UTC")
+            #  self.page.click("#MasterMain_btnSearch")
+            #  self.page.wait_for_load_state("networkidle")
+            #  self.page.wait_for_timeout(3000) # Safety
             
-            content_utc = self.page.content()
-            self.parse_and_save(content_utc, date_obj, mode="UTC")
+            # content_utc = self.page.content()
+            # self.parse_and_save(content_utc, date_obj, mode="UTC")
             
             # --- PASS 2: Local ---
-            print("  [Pass 2] Switching to Local Time...")
+            print("Capturing in Local Time...")
             self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="Local time")
             self.page.click("#MasterMain_btnSearch")
             self.page.wait_for_load_state("networkidle")
@@ -174,7 +174,7 @@ class NOCScraper:
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
-    def parse_and_save(self, html_content, date_obj, mode="UTC"):
+    def parse_and_save(self, html_content, date_obj, mode="Local"):
         soup = BeautifulSoup(html_content, 'html.parser')
         
         # We only need Departures (MasterMain_panelUpper)
@@ -244,7 +244,7 @@ class NOCScraper:
                 
                 existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=flight_date).first()
                 
-                if mode == "UTC":
+                if mode == "Local":
                     # Full Parse & Create
                     tail_number = details.get("Registration", ["", None])[0]
                     dep_apt = details.get("Departure", ["", None])[0]
@@ -285,7 +285,7 @@ class NOCScraper:
                         flight.aircraft_type = type_val
                         flight.version = ver_val
                         
-                    # Crew Parsing (Only on UTC pass to avoid duplication)
+                    # Crew Parsing (Only on Local pass to avoid duplication)
                     # FIX: Clear existing crew first to avoid duplicates
                     # This is done by deleting existing associations for this flight
                     self.session.execute(flight_crew_association.delete().where(
@@ -339,11 +339,11 @@ class NOCScraper:
                             )
                             self.session.execute(ins)
 
-                elif mode == "Local":
+                elif mode == "UTC":
                     # Update ONLY local times
                     if existing:
-                        existing.scheduled_departure_local = parsed_std
-                        existing.scheduled_arrival_local = parsed_sta
+                        existing.scheduled_departure_utc = parsed_std
+                        existing.scheduled_arrival_utc = parsed_sta
                         # We could parse actuals here too if available
                         
             except Exception as e:

@@ -144,8 +144,8 @@ with tab_explore:
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
                         return f"{l} (L) | {u} (Z)"
 
-                    m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure_local, detailed_flight.scheduled_departure))
-                    st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival_local, detailed_flight.scheduled_arrival))
+                    m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
+                    st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
 
                     
                     # -- Crew Section --
@@ -350,7 +350,7 @@ with tab_sync:
 # --- TAB 3: Pairings ---
 
 with tab_pairings:
-    st.header("Scheduled Pairings (Dec 2025)")
+    st.header("Scheduled Pairings")
     from database import ScheduledFlight
     
     session = get_db_session()
@@ -406,7 +406,7 @@ with tab_pairings:
             status = "Flown"
             # Get crew names
             crews = [c.name for c in actual.crew_members]
-            crew_str = ", ".join(crews)
+            crew_str = "; ".join(crews)
         
         data.append({
             "Trip Start": sf.pairing_start_date.strftime("%Y-%m-%d") if sf.pairing_start_date else "N/A",

@@ -20,17 +20,17 @@ class Flight(Base):
     flight_number = Column(String, index=True) # e.g. "FL123"
     date = Column(DateTime) # Date of the flight
     
-    # Times (UTC - Default)
+    # Times (Local -Default)
     scheduled_departure = Column(DateTime)
     scheduled_arrival = Column(DateTime)
     actual_departure = Column(DateTime, nullable=True)
     actual_arrival = Column(DateTime, nullable=True)
     
-    # Times (Local)
-    scheduled_departure_local = Column(DateTime, nullable=True)
-    scheduled_arrival_local = Column(DateTime, nullable=True)
-    actual_departure_local = Column(DateTime, nullable=True)
-    actual_arrival_local = Column(DateTime, nullable=True)
+    # Times (UTC)
+    scheduled_departure_utc = Column(DateTime, nullable=True)
+    scheduled_arrival_utc = Column(DateTime, nullable=True)
+    actual_departure_utc = Column(DateTime, nullable=True)
+    actual_arrival_utc = Column(DateTime, nullable=True)
     
     # New Fields
     sta_raw = Column(String) # Raw STA string e.g. "0042 : 16DEC25"
