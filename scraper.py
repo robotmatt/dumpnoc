@@ -109,22 +109,8 @@ class NOCScraper:
             self.page.type("#MasterMain_tbDate_DateFieldTextBox", date_str, delay=100)
             self.page.press("#MasterMain_tbDate_DateFieldTextBox", "Tab")
             
-            # --- PASS 1: Local Time (PRIMARY) ---
-            # We scrape Local first because the flight's canonical date should be based on
-            # local departure time (e.g., a 6:50 PM departure on 12/20 local, even if it's
-            # 00:50 UTC on 12/21, should be recorded as a 12/20 flight)
-            print("  [Pass 1] Switching to Local Time...")
-            self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="Local time")
-            self.page.click("#MasterMain_btnSearch")
-            self.page.wait_for_load_state("networkidle")
-            self.page.wait_for_timeout(3000)
-            
-            content_local = self.page.content()
-            self.parse_and_save(content_local, date_obj, mode="Local")
-            
-            # --- PASS 2: UTC (SUPPLEMENTARY) ---
-            # UTC pass just adds UTC times to existing records
-            print("  [Pass 2] Switching to UTC...")
+            # --- PASS 1: UTC ---
+            print("  [Pass 1] Switching to UTC...")
             self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="UTC")
             self.page.click("#MasterMain_btnSearch")
             self.page.wait_for_load_state("networkidle")
@@ -132,6 +118,16 @@ class NOCScraper:
             
             content_utc = self.page.content()
             self.parse_and_save(content_utc, date_obj, mode="UTC")
+            
+            # --- PASS 2: Local ---
+            print("  [Pass 2] Switching to Local Time...")
+            self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="Local time")
+            self.page.click("#MasterMain_btnSearch")
+            self.page.wait_for_load_state("networkidle")
+            self.page.wait_for_timeout(3000)
+            
+            content_local = self.page.content()
+            self.parse_and_save(content_local, date_obj, mode="Local")
             
             # Update Sync Status (Only once)
             self._update_sync_status(date_obj)
@@ -246,22 +242,10 @@ class NOCScraper:
                     # Use midnight of the departure date as the canonical flight date
                     flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                # Lookup strategy:
-                # - UTC pass: Look up by UTC-derived date (will create if not found)
-                # - Local pass: Try UTC-derived date first, then try adjacent dates if not found
-                #   (because local time might be on a different day)
                 existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=flight_date).first()
                 
-                # If Local pass and not found, try the day before and after
-                if mode == "Local" and not existing:
-                    for offset in [-1, 1]:
-                        alt_date = flight_date + timedelta(days=offset)
-                        existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=alt_date).first()
-                        if existing:
-                            break
-                
-                if mode == "Local":
-                    # LOCAL PASS (PRIMARY): Full Parse & Create using local times
+                if mode == "UTC":
+                    # Full Parse & Create
                     tail_number = details.get("Registration", ["", None])[0]
                     dep_apt = details.get("Departure", ["", None])[0]
                     arr_apt = details.get("Arrival", ["", None])[0]
@@ -275,10 +259,10 @@ class NOCScraper:
                     if not existing:
                         flight = Flight(
                             flight_number=flight_number,
-                            date=flight_date,  # Use flight_date based on LOCAL departure time
+                            date=flight_date,  # Use flight_date (from departure time), not scrape date
                             tail_number=tail_number,
-                            scheduled_departure_local=parsed_std,
-                            scheduled_arrival_local=parsed_sta,
+                            scheduled_departure=parsed_std,
+                            scheduled_arrival=parsed_sta,
                             departure_airport=dep_apt,
                             arrival_airport=arr_apt,
                             sta_raw=sta_val,
@@ -292,8 +276,8 @@ class NOCScraper:
                         self.session.flush()
                     else:
                         flight = existing
-                        flight.scheduled_departure_local = parsed_std
-                        flight.scheduled_arrival_local = parsed_sta
+                        flight.scheduled_departure = parsed_std
+                        flight.scheduled_arrival = parsed_sta
                         flight.sta_raw = sta_val
                         flight.pax_data = pax_val
                         flight.load_data = load_val
@@ -301,7 +285,7 @@ class NOCScraper:
                         flight.aircraft_type = type_val
                         flight.version = ver_val
                         
-                    # Crew Parsing (during Local pass since we're creating the record)
+                    # Crew Parsing (Only on UTC pass to avoid duplication)
                     # FIX: Clear existing crew first to avoid duplicates
                     # This is done by deleting existing associations for this flight
                     self.session.execute(flight_crew_association.delete().where(
@@ -355,15 +339,12 @@ class NOCScraper:
                             )
                             self.session.execute(ins)
 
-                elif mode == "UTC":
-                    # UTC PASS (SUPPLEMENTARY): Update ONLY UTC times on existing record
-                    # The flight should already exist from the Local pass
+                elif mode == "Local":
+                    # Update ONLY local times
                     if existing:
-                        existing.scheduled_departure = parsed_std
-                        existing.scheduled_arrival = parsed_sta
-                    else:
-                        # This shouldn't happen in normal operation
-                        print(f"  Warning: Flight {flight_number} not found during UTC pass (should exist from Local pass)")
+                        existing.scheduled_departure_local = parsed_std
+                        existing.scheduled_arrival_local = parsed_sta
+                        # We could parse actuals here too if available
                         
             except Exception as e:
                 print(f"Error parsing flight item: {e}")
