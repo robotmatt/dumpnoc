@@ -235,7 +235,14 @@ class NOCScraper:
                     except: pass
 
                 # --- DB Interaction ---
-                existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=date_obj).first()
+                # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
+                # This prevents red-eye flights from being duplicated across midnight
+                flight_date = date_obj  # Default to scrape date
+                if parsed_std:
+                    # Use midnight of the departure date as the canonical flight date
+                    flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=flight_date).first()
                 
                 if mode == "UTC":
                     # Full Parse & Create
@@ -252,7 +259,7 @@ class NOCScraper:
                     if not existing:
                         flight = Flight(
                             flight_number=flight_number,
-                            date=date_obj,
+                            date=flight_date,  # Use flight_date (from departure time), not scrape date
                             tail_number=tail_number,
                             scheduled_departure=parsed_std,
                             scheduled_arrival=parsed_sta,
