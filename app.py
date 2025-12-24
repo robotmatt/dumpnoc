@@ -105,14 +105,36 @@ with tab_explore:
         
         if not df_flights.empty:
             # 1. Master List
-            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
+            display_df = df_flights[['id','flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
             # Format times
             display_df['scheduled_departure'] = pd.to_datetime(display_df['scheduled_departure']).dt.strftime('%H:%M')
             
-            st.dataframe(display_df, width='stretch', hide_index=True)
+            st.subheader("Flight Schedule")
+            st.caption("Select a row to view full details")
+
+            event = st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                on_select="rerun",            # This triggers the script to rerun when a row is clicked
+                selection_mode="single-row",  # Ensures only one flight is picked at a time
+                column_config={
+                    "id": None,               # Hides the ID column from the user
+                    "flight_number": "Flight #",
+                    "scheduled_departure": "Departure"
+                }
+            )
             
             st.divider()
             
+            if event.selection.rows:
+                selected_index = event.selection.rows[0]
+                
+                # Extract the unique ID and Flight Number from the selected row
+                selected_id = display_df.iloc[selected_index]['id']
+                selected_flight_num = display_df.iloc[selected_index]['flight_number']
+      
+
             # 2. Drill Down Selection
             flight_opts = df_flights['flight_number'].tolist()
             selected_flight_num = st.selectbox("Select Flight to View Details", flight_opts)
