@@ -8,3 +8,4 @@ html5lib
 psycopg2-binary
 google-cloud-firestore
 firebase-admin
+watchdog
