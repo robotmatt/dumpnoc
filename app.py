@@ -114,7 +114,7 @@ with tab_explore:
 
             event = st.dataframe(
                 display_df,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 on_select="rerun",            # This triggers the script to rerun when a row is clicked
                 selection_mode="single-row",  # Ensures only one flight is picked at a time
@@ -292,7 +292,7 @@ with tab_sync:
         st.caption("Enable cloud sync in the sidebar to use these features.")
     else:
         # Unified Sync Button
-        if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", use_container_width=True):
+        if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch'):
             with st.status("Performing Full Sync...", expanded=True) as status:
                 session = get_db_session()
                 from ingest_data import upload_ioe_to_cloud, upload_pairings_to_cloud, upload_flights_to_cloud, upload_metadata_to_cloud
