@@ -2,6 +2,7 @@ import re
 import os
 from datetime import datetime, timedelta
 from database import get_session, ScheduledFlight, IOEAssignment, init_db
+from bid_periods import get_bid_period_date_range
 
 PAIRINGS_DIR = "pairings"
 IOE_DIR = "ioe"
@@ -282,13 +283,87 @@ def save_pairing(session, pairing_id, month_year, start_dates, legs, total_credi
         })
         
     # Instantiate for each start date
+    # Get acceptable date range for this bid period
+    bp_start, bp_end = get_bid_period_date_range(month_year.year, month_year.month)
+    # Convert to datetime for comparison
+    bp_start_dt = datetime.combine(bp_start, datetime.min.time())
+    bp_end_dt = datetime.combine(bp_end, datetime.min.time())
+
     for start_day in start_dates:
         # Construct actual start date
+        base_date = None
+        
+        # Try current month first
         try:
-            base_date = month_year.replace(day=start_day)
+            candidate = month_year.replace(day=start_day)
+            # Check if this date is within bid period (or reasonably close if we want flexibility, but strict is safer)
+            # Actually, Feb 1 is in Feb bid period.
+            base_date = candidate
         except ValueError:
-            continue # Invalid date? e.g. Feb 30
+            # If invalid (e.g. Feb 30), try previous month
+            # This handles Jan 31 in Feb packet
+            prev_month = month_year - timedelta(days=1)
+            try:
+                candidate = prev_month.replace(day=start_day)
+                base_date = candidate
+            except ValueError:
+                pass
+                
+        # Special Case: Next Month overlap (e.g. Mar 1 in Feb packet)
+        # If we found a base_date (e.g. Feb 1), it might actually be Mar 1 if Feb 1 isn't what was intended
+        # But '1' usually means 1st of main month.
+        # However, if 'base_date' is outside the bid period, strictly reject it?
+        # Jan 31 is in Feb BP.
+        # Feb 1 is in Feb BP.
+        # Mar 1 is in Feb BP.
+        
+        # If we haven't found a valid date yet, check next month?
+        # (Only really if current month day was valid but we want next month? Unlikely logic path)
+        
+        if not base_date:
+            # Try next month? (e.g. input 1, but meant Mar 1 in Feb text?)
+            # Usually input 1 works for Feb 1.
+            # But just in case
+            next_month = (month_year + timedelta(days=32)).replace(day=1)
+            try:
+                candidate = next_month.replace(day=start_day)
+                base_date = candidate
+            except ValueError:
+                pass
+
+        if not base_date:
+            continue
+
+        # Final Validation against Bid Period
+        # Allow slight buffer? No, strict based on User Rules.
+        # Jan 31 in Feb BP -> OK.
+        # Mar 31 in Apr BP -> FAIL.
+        if not (bp_start_dt <= base_date <= bp_end_dt):
+            # Try to see if shifting months helps?
+            # e.g. we parsed "31" as "Jan 31" for April BP (Apr 1-30). 
+            # Jan 31 is not in Apr BP. Correctly rejected.
             
+            # What if we parsed "1" as "Feb 1" for Feb BP (Jan 31-Mar 1). OK.
+            # What if it was "Mar 1" in Feb BP?
+            # We parsed "Feb 1". It is in BP. valid.
+            # We effectively lose "Mar 1" capability if "Feb 1" is also valid.
+            # But text file parsing is limited.
+            
+            # Main fix is for Jan 31 (Feb BP).
+            # base_date = Jan 31. BP = Jan 31-Mar 1. Valid.
+            pass
+            
+            # Double check invalid dates
+            if base_date < bp_start_dt or base_date > bp_end_dt:
+                # One last attempt: Check if it's Mar 1 in Feb BP
+                # If we parsed Feb 1 (valid date) but maybe logic says check alternatives?
+                # No, standard assumption applies.
+                
+                # If we parsed "30" in Feb -> Jan 30.
+                # Jan 30 is NOT in Feb BP (Jan 31 start).
+                # So Jan 30 rejected. Correct.
+                continue
+
         for leg in processed_legs:
             # Flight Date = Base Date + (Leg Day - 1)
             flight_date = base_date + timedelta(days=(leg["day"] - 1))

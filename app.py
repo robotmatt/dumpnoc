@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 from config import NOC_USERNAME, NOC_PASSWORD
 from scraper import NOCScraper
 from database import get_session, Flight, CrewMember, DailySyncStatus, init_db
-from sqlalchemy import desc
+from sqlalchemy import desc, extract
+from bid_periods import get_bid_period_date_range, get_bid_period_from_date
 
 # Page Config
 st.set_page_config(page_title="NOC Mobile Scraper", layout="wide", page_icon="✈️")
@@ -378,16 +379,36 @@ with tab_pairings:
     session = get_db_session()
     
     # Filter Controls
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
         # Get unique pairing numbers
         pairing_nums = [r[0] for r in session.query(ScheduledFlight.pairing_number).distinct()]
         sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums), key="pairing_search")
     
     with col2:
+        # Get distinct months from ScheduledFlight
+        pairing_dates_q = session.query(ScheduledFlight.pairing_start_date).distinct().all()
+        months_set = set()
+        for d in pairing_dates_q:
+            if d[0]:
+                bp_year, bp_month = get_bid_period_from_date(d[0])
+                # Create a dummy date for formatting (use day 1)
+                dt_obj = datetime(bp_year, bp_month, 1)
+                months_set.add(dt_obj.strftime("%B %Y"))
+        
+        # Ensure current month is an option (using current bid period)
+        curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
+        current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
+        months_set.add(current_month_str)
+            
+        months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
+        default_idx = months.index(current_month_str) if current_month_str in months else 0
+        sel_month_str = st.selectbox("Filter by Bid Period", months, index=default_idx, key="month_search")
+
+    with col3:
         sel_date = st.date_input("Filter by Date", value=None, key="date_search")
     
-    with col3:
+    with col4:
         st.write("") # Spacer
         if st.button("🔄 Reset"):
             st.rerun()
@@ -398,12 +419,23 @@ with tab_pairings:
     # Logic Change: Grouping by Pairing Instance
     if sel_pairing != "All":
         query = query.filter(ScheduledFlight.pairing_number == sel_pairing)
-        if sel_date:
-            # Show the specific instance starting on this date
-            query = query.filter(ScheduledFlight.pairing_start_date == datetime.combine(sel_date, datetime.min.time()))
-    elif sel_date:
-        # Show all pairings starting on this date
+    
+    if sel_date:
+        # Show all pairings starting on this date (overrides/refines month)
         query = query.filter(ScheduledFlight.pairing_start_date == datetime.combine(sel_date, datetime.min.time()))
+    elif sel_month_str:
+        # Filter by month if no specific date is selected
+        sel_month_dt = datetime.strptime(sel_month_str, "%B %Y")
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        
+        # Convert to datetime for comparison (inclusive of start, exclusive of end+1 day)
+        start_dt = datetime.combine(bp_start, datetime.min.time())
+        end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
+        
+        query = query.filter(
+            ScheduledFlight.pairing_start_date >= start_dt,
+            ScheduledFlight.pairing_start_date < end_dt
+        )
         
     scheduled_rows = query.order_by(
         ScheduledFlight.pairing_start_date, 
@@ -455,25 +487,39 @@ with tab_ioe:
     
     session = get_db_session()
     
-    # 1. Month Selector
+    # 1. Bid Period Selector
     # Get distinct months from assignments
     dates_q = session.query(IOEAssignment.start_date).all()
     # Unique months set
     months_set = set()
     for d in dates_q:
         if d[0]:
-            months_set.add(d[0].strftime("%B %Y"))
+            bp_year, bp_month = get_bid_period_from_date(d[0])
+            dt_obj = datetime(bp_year, bp_month, 1)
+            months_set.add(dt_obj.strftime("%B %Y"))
+            
+    # Ensure current month is an option
+    curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
+    current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
+    months_set.add(current_month_str)
             
     months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
+    default_idx = months.index(current_month_str) if current_month_str in months else 0
     
-    selected_month_str = st.selectbox("Select Month", months) if months else None
+    selected_month_str = st.selectbox("Select Bid Period", months, index=default_idx) if months else None
     
     if selected_month_str:
         sel_month_dt = datetime.strptime(selected_month_str, "%B %Y")
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        
+        # Convert to datetime for comparison
+        start_dt = datetime.combine(bp_start, datetime.min.time())
+        end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
+        
         assignments = session.query(IOEAssignment).filter(
-            extract('month', IOEAssignment.start_date) == sel_month_dt.month,
-            extract('year', IOEAssignment.start_date) == sel_month_dt.year
-        ).all()
+            IOEAssignment.start_date >= start_dt,
+            IOEAssignment.start_date < end_dt
+        ).order_by(IOEAssignment.start_date.asc()).all()
     else:
         assignments = []
     
@@ -604,6 +650,9 @@ with tab_ioe:
         total_legs_global += total_legs
         total_ioe_verified_global += legs_marked_ioe
         
+        if total_legs == 0:
+            details.append("⚠️ No schedule data found for this pairing")
+
         audit_results.append({
             "Check Airman": assign.employee_id,
             "Pairing": assign.pairing_number,
@@ -647,12 +696,10 @@ with tab_ioe:
         # Get assigned pairings for this month (not just employee IDs)
         assigned_pairings = set([a.pairing_number for a in assignments])
         
-        # Query all flights in this month with IOE flags
-        month_start = sel_month_dt.replace(day=1)
-        if sel_month_dt.month == 12:
-            month_end = sel_month_dt.replace(year=sel_month_dt.year + 1, month=1, day=1)
-        else:
-            month_end = sel_month_dt.replace(month=sel_month_dt.month + 1, day=1)
+        # Query all flights in this bid period with IOE flags
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        month_start = datetime.combine(bp_start, datetime.min.time())
+        month_end = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
         # Get all flights in this month
         flights_in_month = session.query(Flight).filter(
@@ -729,12 +776,10 @@ with tab_ioe:
         # Get assigned pairings for this month
         assigned_pairings = set([a.pairing_number for a in assignments])
         
-        # Query all flights in this month
-        month_start = sel_month_dt.replace(day=1)
-        if sel_month_dt.month == 12:
-            month_end = sel_month_dt.replace(year=sel_month_dt.year + 1, month=1, day=1)
-        else:
-            month_end = sel_month_dt.replace(month=sel_month_dt.month + 1, day=1)
+        # Query all flights in this bid period
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        month_start = datetime.combine(bp_start, datetime.min.time())
+        month_end = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
         flights_in_month = session.query(Flight).filter(
             Flight.date >= month_start,
