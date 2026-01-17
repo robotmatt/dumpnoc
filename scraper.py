@@ -1,5 +1,15 @@
-import time
+import os
+import asyncio
 from datetime import datetime, timedelta
+
+# Fix for Playwright/asyncio on Windows (especially Python 3.8+)
+if os.name == 'nt':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except AttributeError:
+        # Fallback for environments where this isn't available
+        pass
+
 from playwright.sync_api import sync_playwright, TimeoutError
 from bs4 import BeautifulSoup
 from config import LOGIN_URL, STATION_OPS_URL
@@ -100,17 +110,17 @@ class NOCScraper:
             self.page.press("#MasterMain_tbDate_DateFieldTextBox", "Tab")
             
             # --- PASS 1: UTC ---
-            print("  [Pass 1] Switching to UTC...")
-            self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="UTC")
-            self.page.click("#MasterMain_btnSearch")
-            self.page.wait_for_load_state("networkidle")
-            self.page.wait_for_timeout(3000) # Safety
+            # print("  [Pass 1] Switching to UTC...")
+            # self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="UTC")
+            #  self.page.click("#MasterMain_btnSearch")
+            #  self.page.wait_for_load_state("networkidle")
+            #  self.page.wait_for_timeout(3000) # Safety
             
-            content_utc = self.page.content()
-            self.parse_and_save(content_utc, date_obj, mode="UTC")
+            # content_utc = self.page.content()
+            # self.parse_and_save(content_utc, date_obj, mode="UTC")
             
             # --- PASS 2: Local ---
-            print("  [Pass 2] Switching to Local Time...")
+            print("Capturing in Local Time...")
             self.page.select_option("#MasterMain_TimeMode_DP_TimeModes", label="Local time")
             self.page.click("#MasterMain_btnSearch")
             self.page.wait_for_load_state("networkidle")
@@ -131,7 +141,7 @@ class NOCScraper:
     def _update_sync_status(self, date_obj):
         try:
             date_key = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-            sync_status = self.session.query(DailySyncStatus).get(date_key)
+            sync_status = self.session.get(DailySyncStatus, date_key)
             if not sync_status:
                 sync_status = DailySyncStatus(date=date_key)
                 self.session.add(sync_status)
@@ -142,14 +152,41 @@ class NOCScraper:
             sync_status.flights_found = count
             sync_status.status = "Success"
             self.session.commit()
-            print(f"Sync status updated for {date_key}")
+            
+            # Update Global Metadata
+            from database import set_metadata
+            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            set_metadata(self.session, "last_successful_sync", now_str)
+            
+            # Sync to Firestore if enabled
+            from config import ENABLE_CLOUD_SYNC
+            from firestore_lib import is_cloud_sync_enabled
+            if is_cloud_sync_enabled():
+                from firestore_lib import upload_metadata
+                upload_metadata("last_successful_sync", now_str)
+                
+                # Auto-upload the flights for this specific day
+                from ingest_data import upload_flights_to_cloud
+                # scraper's session is already open
+                upload_flights_to_cloud(self.session, start_date=date_key, end_date=date_key)
+            
+            print(f"Sync status and global metadata updated for {date_key}")
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
-    def parse_and_save(self, html_content, date_obj, mode="UTC"):
+    def parse_and_save(self, html_content, date_obj, mode="Local"):
         soup = BeautifulSoup(html_content, 'html.parser')
-        list_items = soup.find_all("div", class_="ListItem")
-        print(f"  Parsng {len(list_items)} flights ({mode})...")
+        
+        # We only need Departures (MasterMain_panelUpper)
+        # Avoids duplicate flights that appear in both Departures (today) and Arrivals (tomorrow)
+        departure_panel = soup.find("div", id="MasterMain_panelUpper")
+        if departure_panel:
+            list_items = departure_panel.find_all("div", class_="ListItem")
+        else:
+            # Fallback to all list items if panel ID not found
+            list_items = soup.find_all("div", class_="ListItem")
+            
+        print(f"  Parsing {len(list_items)} flights from Departures ({mode})...")
         
         for item in list_items:
             try:
@@ -198,9 +235,16 @@ class NOCScraper:
                     except: pass
 
                 # --- DB Interaction ---
-                existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=date_obj).first()
+                # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
+                # This prevents red-eye flights from being duplicated across midnight
+                flight_date = date_obj  # Default to scrape date
+                if parsed_std:
+                    # Use midnight of the departure date as the canonical flight date
+                    flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                if mode == "UTC":
+                existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=flight_date).first()
+                
+                if mode == "Local":
                     # Full Parse & Create
                     tail_number = details.get("Registration", ["", None])[0]
                     dep_apt = details.get("Departure", ["", None])[0]
@@ -215,7 +259,7 @@ class NOCScraper:
                     if not existing:
                         flight = Flight(
                             flight_number=flight_number,
-                            date=date_obj,
+                            date=flight_date,  # Use flight_date (from departure time), not scrape date
                             tail_number=tail_number,
                             scheduled_departure=parsed_std,
                             scheduled_arrival=parsed_sta,
@@ -241,7 +285,7 @@ class NOCScraper:
                         flight.aircraft_type = type_val
                         flight.version = ver_val
                         
-                    # Crew Parsing (Only on UTC pass to avoid duplication)
+                    # Crew Parsing (Only on Local pass to avoid duplication)
                     # FIX: Clear existing crew first to avoid duplicates
                     # This is done by deleting existing associations for this flight
                     self.session.execute(flight_crew_association.delete().where(
@@ -295,11 +339,11 @@ class NOCScraper:
                             )
                             self.session.execute(ins)
 
-                elif mode == "Local":
+                elif mode == "UTC":
                     # Update ONLY local times
                     if existing:
-                        existing.scheduled_departure_local = parsed_std
-                        existing.scheduled_arrival_local = parsed_sta
+                        existing.scheduled_departure_utc = parsed_std
+                        existing.scheduled_arrival_utc = parsed_sta
                         # We could parse actuals here too if available
                         
             except Exception as e:

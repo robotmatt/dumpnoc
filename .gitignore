@@ -318,3 +318,8 @@ noc_data.db
 noc_data.db-journal
 
 .DS_Store
+firestore_key.json
+/testing/
+*.log
+*.db.bak
+debug_log.txt

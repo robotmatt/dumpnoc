@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 from config import NOC_USERNAME, NOC_PASSWORD
 from scraper import NOCScraper
 from database import get_session, Flight, CrewMember, DailySyncStatus, init_db
-from sqlalchemy import desc
+from sqlalchemy import desc, extract
+from bid_periods import get_bid_period_date_range, get_bid_period_from_date
 
 # Page Config
 st.set_page_config(page_title="NOC Mobile Scraper", layout="wide", page_icon="✈️")
@@ -27,7 +28,34 @@ with st.sidebar:
     password = st.text_input("Password", value=NOC_PASSWORD if NOC_PASSWORD else "", type="password")
     
     st.divider()
-    st.info("NOC Mobile Scraper v1.1")
+    
+    # Cloud Sync Toggle
+    from config import ENABLE_CLOUD_SYNC
+    from database import get_metadata, set_metadata, get_session
+    from firestore_lib import set_cloud_sync_enabled
+    
+    # Initialize from DB or Config
+    session = get_session()
+    db_cloud_sync = get_metadata(session, "ui_enable_cloud_sync")
+    session.close()
+    
+    if db_cloud_sync is None:
+        initial_val = ENABLE_CLOUD_SYNC
+    else:
+        initial_val = db_cloud_sync.lower() == 'true'
+        
+    cloud_sync_enabled = st.toggle("Enable Cloud Sync", value=initial_val)
+    
+    # Update persistence and global state
+    if cloud_sync_enabled != initial_val:
+        session = get_session()
+        set_metadata(session, "ui_enable_cloud_sync", str(cloud_sync_enabled).lower())
+        session.close()
+    
+    set_cloud_sync_enabled(cloud_sync_enabled)
+    
+    st.divider()
+    st.info("NOC Mobile Scraper v1.2")
 
 if not username or not password:
     st.warning("Please enter NOC Mobile credentials in the sidebar to proceed.")
@@ -35,11 +63,15 @@ if not username or not password:
 
 # --- Sync Status Summary ---
 session = get_db_session()
-last_sync = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
+from database import get_metadata
+global_last_sync = get_metadata(session, "last_successful_sync")
+last_sync_rec = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
 session.close()
 
-if last_sync:
-    st.caption(f"Last successful sync: **{last_sync.date.strftime('%Y-%m-%d')}** (performed at {last_sync.last_scraped_at.strftime('%H:%M')}) - Found {last_sync.flights_found} flights")
+if global_last_sync:
+    st.info(f"📊 **Data Freshness:** Last pull performed at {global_last_sync}")
+if last_sync_rec:
+    st.caption(f"Last data point synced: {last_sync_rec.date.strftime('%Y-%m-%d')} ({last_sync_rec.flights_found} flights)")
 
 # Tabs
 tab_explore, tab_sync, tab_pairings, tab_ioe = st.tabs(["📅 Historical Data", "🔄 Sync Data", "📋 Pairings", "🎓 IOE Audit"])
@@ -57,7 +89,7 @@ with tab_explore:
         # Check if we have data for this date
         session = get_db_session()
         view_dt = datetime.combine(view_date, datetime.min.time())
-        status_rec = session.query(DailySyncStatus).get(view_dt)
+        status_rec = session.get(DailySyncStatus, view_dt)
         
         if status_rec:
             st.success(f"**Status:** {status_rec.status}")
@@ -74,14 +106,36 @@ with tab_explore:
         
         if not df_flights.empty:
             # 1. Master List
-            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
+            display_df = df_flights[['id','flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
             # Format times
             display_df['scheduled_departure'] = pd.to_datetime(display_df['scheduled_departure']).dt.strftime('%H:%M')
             
-            st.dataframe(display_df, width='stretch', hide_index=True)
+            st.subheader("Flight Schedule")
+            st.caption("Select a row to view full details")
+
+            event = st.dataframe(
+                display_df,
+                width='stretch',
+                hide_index=True,
+                on_select="rerun",            # This triggers the script to rerun when a row is clicked
+                selection_mode="single-row",  # Ensures only one flight is picked at a time
+                column_config={
+                    "id": None,               # Hides the ID column from the user
+                    "flight_number": "Flight #",
+                    "scheduled_departure": "Departure"
+                }
+            )
             
             st.divider()
             
+            if event.selection.rows:
+                selected_index = event.selection.rows[0]
+                
+                # Extract the unique ID and Flight Number from the selected row
+                selected_id = display_df.iloc[selected_index]['id']
+                selected_flight_num = display_df.iloc[selected_index]['flight_number']
+      
+
             # 2. Drill Down Selection
             flight_opts = df_flights['flight_number'].tolist()
             selected_flight_num = st.selectbox("Select Flight to View Details", flight_opts)
@@ -113,8 +167,8 @@ with tab_explore:
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
                         return f"{l} (L) | {u} (Z)"
 
-                    m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure_local, detailed_flight.scheduled_departure))
-                    st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival_local, detailed_flight.scheduled_arrival))
+                    m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
+                    st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
 
                     
                     # -- Crew Section --
@@ -127,7 +181,8 @@ with tab_explore:
                     crew_list = []
                     for row in assoc_rows:
                         # Get member details
-                        cm = session.query(CrewMember).get(row.crew_id)
+                        # cm = session.query(CrewMember).get(row.crew_id)
+                        cm = session.get(CrewMember, row.crew_id)
                         crew_list.append({
                             "Role": row.role,
                             "Name": cm.name,
@@ -160,6 +215,18 @@ with tab_explore:
 with tab_sync:
     st.header("Sync Settings")
     
+    # Cloud Configuration Check (using dynamic setting)
+    from firestore_lib import is_cloud_sync_enabled
+    active_cloud_sync = is_cloud_sync_enabled()
+    
+    if active_cloud_sync:
+        st.success("✅ Cloud Sync Active")
+    else:
+         st.warning("⚠️ Cloud Sync Inactive")
+
+    st.divider()
+    
+    st.subheader("1. Scraper Sync (NOC -> Local DB)")
     sync_mode = st.radio("Sync Mode", ["Current Day", "Date Range"], horizontal=True)
     
     start_date = datetime.today()
@@ -174,7 +241,7 @@ with tab_sync:
     else:
         st.info(f"Will sync data for: **{start_date.strftime('%Y-%m-%d')}**")
 
-    if st.button(f"Start Sync ({sync_mode})", type="primary"):
+    if st.button(f"Start Scraper Sync ({sync_mode})", type="primary"):
         status_area = st.empty()
         
         if start_date > end_date:
@@ -201,6 +268,10 @@ with tab_sync:
                         s_dt = datetime.combine(curr, datetime.min.time())
                         scraper.scrape_date(s_dt)
                         
+                        # Optional: Auto-push to cloud if enabled?
+                        # For now, let's keep it manual or rely on scraper implementation if we changed it. 
+                        # But we didn't change scraper.py to auto-push yet.
+                        
                         days_done += 1
                         progress_bar.progress(days_done / total_days)
                         curr += timedelta(days=1)
@@ -209,35 +280,168 @@ with tab_sync:
                 else:
                     status_area.error("Login failed. Please check your credentials.")
             except Exception as e:
+                import traceback
                 status_area.error(f"An error occurred: {e}")
+                st.exception(e) # Show full traceback
             finally:
                 scraper.stop()
+    
+    st.divider()
+    
+    st.subheader("2. Cloud Sync (Local DB -> Google Firestore)")
+    if not active_cloud_sync:
+        st.caption("Enable cloud sync in the sidebar to use these features.")
+    else:
+        # Unified Sync Button
+        if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch'):
+            with st.status("Performing Full Sync...", expanded=True) as status:
+                session = get_db_session()
+                from ingest_data import upload_ioe_to_cloud, upload_pairings_to_cloud, upload_flights_to_cloud, upload_metadata_to_cloud
                 
+                status.write("Uploading IOE assignments...")
+                cnt_ioe = upload_ioe_to_cloud(session)
+                
+                status.write("Uploading scheduled pairings...")
+                cnt_pair = upload_pairings_to_cloud(session)
+                
+                status.write("Uploading historical flight data...")
+                cnt_flt = upload_flights_to_cloud(session) # No date range = all
+                
+                status.write("Uploading application metadata...")
+                cnt_meta = upload_metadata_to_cloud(session)
+                
+                session.close()
+                status.update(label="✅ Full Sync Complete!", state="complete", expanded=False)
+                st.success(f"Successfully mirrored: {cnt_ioe} IOE, {cnt_pair} Pairings, {cnt_flt} Flights, {cnt_meta} Metadata.")
+
+        st.divider()
+        st.caption("Manual Individual Syncs:")
+        c1, c2, c3 = st.columns(3)
+        
+        with c1:
+            if st.button("☁️ Upload/Update IOE Assignments"):
+                with st.spinner("Uploading IOE data..."):
+                    from ingest_data import upload_ioe_to_cloud
+                    session = get_db_session()
+                    cnt = upload_ioe_to_cloud(session)
+                    session.close()
+                    st.success(f"Uploaded {cnt} IOE records.")
+                    
+        with c2:
+            if st.button("☁️ Upload/Update Scheduled Pairings"):
+                with st.spinner("Uploading Scheduled Flights..."):
+                    from ingest_data import upload_pairings_to_cloud
+                    session = get_db_session()
+                    cnt = upload_pairings_to_cloud(session)
+                    session.close()
+                    st.success(f"Uploaded {cnt} scheduled flights.")
+        
+        with c3:
+            if st.button("☁️ Upload Scraped Flights History"):
+                with st.spinner("Uploading Historical Flights..."):
+                    from ingest_data import upload_flights_to_cloud
+                    session = get_db_session()
+                    # optionally filter by date range selected above?
+                    # Let's use the date picker from scraper section if user wants, 
+                    # but maybe default to all or a different picker.
+                    # For simplicity, let's just upload ALL for now or reuse the picker?
+                    # Reusing the picker seems smart.
+                    s_dt = datetime.combine(start_date, datetime.min.time())
+                    e_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
+                    
+                    cnt = upload_flights_to_cloud(session, start_date=s_dt, end_date=e_dt)
+                    session.close()
+                    st.success(f"Uploaded {cnt} flights from {start_date} to {end_date}.")
+
+    st.divider()
+    
+    st.subheader("3. Restore / Hydrate Local DB (Cloud -> Local)")
+    st.markdown("⚠️ **Warning**: This will merge data from the Cloud into your local database.")
+    
+    if active_cloud_sync:
+        if st.button("⬇️ Restore from Cloud", type="secondary"):
+             with st.spinner("Restoring data from Cloud..."):
+                 from ingest_data import sync_down_from_cloud
+                 session = get_db_session()
+                 stats = sync_down_from_cloud(session)
+                 session.close()
+                 st.success(f"Restore Complete! Stats: {stats}")
+                 st.balloons()
+    else:
+        st.info("Cloud sync is disabled. Enable it in the sidebar to use this feature.")
+
 # --- TAB 3: Pairings ---
+
 with tab_pairings:
-    st.header("Scheduled Pairings (Dec 2025)")
+    st.header("Scheduled Pairings")
     from database import ScheduledFlight
     
     session = get_db_session()
     
     # Filter Controls
-    col1, col2 = st.columns(2)
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
         # Get unique pairing numbers
         pairing_nums = [r[0] for r in session.query(ScheduledFlight.pairing_number).distinct()]
-        sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums))
+        sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums), key="pairing_search")
     
     with col2:
-        sel_date = st.date_input("Filter by Date", value=None)
+        # Get distinct months from ScheduledFlight
+        pairing_dates_q = session.query(ScheduledFlight.pairing_start_date).distinct().all()
+        months_set = set()
+        for d in pairing_dates_q:
+            if d[0]:
+                bp_year, bp_month = get_bid_period_from_date(d[0])
+                # Create a dummy date for formatting (use day 1)
+                dt_obj = datetime(bp_year, bp_month, 1)
+                months_set.add(dt_obj.strftime("%B %Y"))
         
+        # Ensure current month is an option (using current bid period)
+        curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
+        current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
+        months_set.add(current_month_str)
+            
+        months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
+        default_idx = months.index(current_month_str) if current_month_str in months else 0
+        sel_month_str = st.selectbox("Filter by Bid Period", months, index=default_idx, key="month_search")
+
+    with col3:
+        sel_date = st.date_input("Filter by Date", value=None, key="date_search")
+    
+    with col4:
+        st.write("") # Spacer
+        if st.button("🔄 Reset"):
+            st.rerun()
+
     # Build Query
     query = session.query(ScheduledFlight)
+    
+    # Logic Change: Grouping by Pairing Instance
     if sel_pairing != "All":
         query = query.filter(ScheduledFlight.pairing_number == sel_pairing)
+    
     if sel_date:
-        query = query.filter(ScheduledFlight.date == datetime.combine(sel_date, datetime.min.time()))
+        # Show all pairings starting on this date (overrides/refines month)
+        query = query.filter(ScheduledFlight.pairing_start_date == datetime.combine(sel_date, datetime.min.time()))
+    elif sel_month_str:
+        # Filter by month if no specific date is selected
+        sel_month_dt = datetime.strptime(sel_month_str, "%B %Y")
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
         
-    scheduled_rows = query.order_by(ScheduledFlight.date, ScheduledFlight.scheduled_departure).limit(500).all()
+        # Convert to datetime for comparison (inclusive of start, exclusive of end+1 day)
+        start_dt = datetime.combine(bp_start, datetime.min.time())
+        end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
+        
+        query = query.filter(
+            ScheduledFlight.pairing_start_date >= start_dt,
+            ScheduledFlight.pairing_start_date < end_dt
+        )
+        
+    scheduled_rows = query.order_by(
+        ScheduledFlight.pairing_start_date, 
+        ScheduledFlight.date, 
+        ScheduledFlight.scheduled_departure
+    ).limit(1000).all()
     
     # Correlate
     data = []
@@ -256,14 +460,18 @@ with tab_pairings:
             status = "Flown"
             # Get crew names
             crews = [c.name for c in actual.crew_members]
-            crew_str = ", ".join(crews)
+            crew_str = "; ".join(crews)
         
         data.append({
-            "Date": sf.date.strftime("%Y-%m-%d"),
+            "Trip Start": sf.pairing_start_date.strftime("%Y-%m-%d") if sf.pairing_start_date else "N/A",
+            "Leg Date": sf.date.strftime("%Y-%m-%d"),
             "Pairing": sf.pairing_number,
             "Flight": sf.flight_number,
             "Route": f"{sf.departure_airport}-{sf.arrival_airport}",
-            "Scheduled Time": sf.scheduled_departure,
+            "Sch Dep": sf.scheduled_departure,
+            "Sch Arr": sf.scheduled_arrival or "N/A",
+            "Block": sf.block_time or "N/A",
+            "Credit": sf.total_credit or "N/A",
             "Status": status,
             "Actual Crew": crew_str
         })
@@ -279,25 +487,39 @@ with tab_ioe:
     
     session = get_db_session()
     
-    # 1. Month Selector
+    # 1. Bid Period Selector
     # Get distinct months from assignments
     dates_q = session.query(IOEAssignment.start_date).all()
     # Unique months set
     months_set = set()
     for d in dates_q:
         if d[0]:
-            months_set.add(d[0].strftime("%B %Y"))
+            bp_year, bp_month = get_bid_period_from_date(d[0])
+            dt_obj = datetime(bp_year, bp_month, 1)
+            months_set.add(dt_obj.strftime("%B %Y"))
+            
+    # Ensure current month is an option
+    curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
+    current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
+    months_set.add(current_month_str)
             
     months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
+    default_idx = months.index(current_month_str) if current_month_str in months else 0
     
-    selected_month_str = st.selectbox("Select Month", months) if months else None
+    selected_month_str = st.selectbox("Select Bid Period", months, index=default_idx) if months else None
     
     if selected_month_str:
         sel_month_dt = datetime.strptime(selected_month_str, "%B %Y")
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        
+        # Convert to datetime for comparison
+        start_dt = datetime.combine(bp_start, datetime.min.time())
+        end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
+        
         assignments = session.query(IOEAssignment).filter(
-            extract('month', IOEAssignment.start_date) == sel_month_dt.month,
-            extract('year', IOEAssignment.start_date) == sel_month_dt.year
-        ).all()
+            IOEAssignment.start_date >= start_dt,
+            IOEAssignment.start_date < end_dt
+        ).order_by(IOEAssignment.start_date.asc()).all()
     else:
         assignments = []
     
@@ -313,13 +535,21 @@ with tab_ioe:
     
     for assign in assignments:
         start_dt = assign.start_date
-        end_dt = start_dt + timedelta(days=5)
         
+        # Use pairing_start_date for precise leg matching
         legs = session.query(ScheduledFlight).filter(
             ScheduledFlight.pairing_number == assign.pairing_number,
-            ScheduledFlight.date >= start_dt,
-            ScheduledFlight.date <= end_dt
-        ).order_by(ScheduledFlight.date).all()
+            ScheduledFlight.pairing_start_date == start_dt
+        ).order_by(ScheduledFlight.date, ScheduledFlight.scheduled_departure).all()
+        
+        # Fallback to date range if no legs found with specific start date (legacy data)
+        if not legs:
+            end_dt = start_dt + timedelta(days=5)
+            legs = session.query(ScheduledFlight).filter(
+                ScheduledFlight.pairing_number == assign.pairing_number,
+                ScheduledFlight.date >= start_dt,
+                ScheduledFlight.date <= end_dt
+            ).order_by(ScheduledFlight.date, ScheduledFlight.scheduled_departure).all()
         
         total_legs = len(legs)
         legs_flown_by_student = 0
@@ -420,6 +650,9 @@ with tab_ioe:
         total_legs_global += total_legs
         total_ioe_verified_global += legs_marked_ioe
         
+        if total_legs == 0:
+            details.append("⚠️ No schedule data found for this pairing")
+
         audit_results.append({
             "Check Airman": assign.employee_id,
             "Pairing": assign.pairing_number,
@@ -463,12 +696,10 @@ with tab_ioe:
         # Get assigned pairings for this month (not just employee IDs)
         assigned_pairings = set([a.pairing_number for a in assignments])
         
-        # Query all flights in this month with IOE flags
-        month_start = sel_month_dt.replace(day=1)
-        if sel_month_dt.month == 12:
-            month_end = sel_month_dt.replace(year=sel_month_dt.year + 1, month=1, day=1)
-        else:
-            month_end = sel_month_dt.replace(month=sel_month_dt.month + 1, day=1)
+        # Query all flights in this bid period with IOE flags
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        month_start = datetime.combine(bp_start, datetime.min.time())
+        month_end = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
         # Get all flights in this month
         flights_in_month = session.query(Flight).filter(
@@ -496,7 +727,11 @@ with tab_ioe:
                         continue
                     
                     # Look up pairing number from ScheduledFlight
-                    flight_num_clean = flight.flight_number.lstrip('C').lstrip('5')
+                    flight_num_clean = flight.flight_number
+                    if flight_num_clean.startswith('C5'):
+                        flight_num_clean = flight_num_clean[2:]
+                    elif flight_num_clean.startswith('C'):
+                        flight_num_clean = flight_num_clean[1:]
                     scheduled = session.query(ScheduledFlight).filter(
                         ScheduledFlight.flight_number == flight_num_clean,
                         ScheduledFlight.date == flight.date
@@ -541,12 +776,10 @@ with tab_ioe:
         # Get assigned pairings for this month
         assigned_pairings = set([a.pairing_number for a in assignments])
         
-        # Query all flights in this month
-        month_start = sel_month_dt.replace(day=1)
-        if sel_month_dt.month == 12:
-            month_end = sel_month_dt.replace(year=sel_month_dt.year + 1, month=1, day=1)
-        else:
-            month_end = sel_month_dt.replace(month=sel_month_dt.month + 1, day=1)
+        # Query all flights in this bid period
+        bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+        month_start = datetime.combine(bp_start, datetime.min.time())
+        month_end = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
         flights_in_month = session.query(Flight).filter(
             Flight.date >= month_start,
@@ -558,7 +791,11 @@ with tab_ioe:
         
         for flight in flights_in_month:
             # Look up pairing
-            flight_num_clean = flight.flight_number.lstrip('C').lstrip('5')
+            flight_num_clean = flight.flight_number
+            if flight_num_clean.startswith('C5'):
+                flight_num_clean = flight_num_clean[2:]
+            elif flight_num_clean.startswith('C'):
+                flight_num_clean = flight_num_clean[1:]
             scheduled = session.query(ScheduledFlight).filter(
                 ScheduledFlight.flight_number == flight_num_clean,
                 ScheduledFlight.date == flight.date

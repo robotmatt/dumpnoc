@@ -20,17 +20,17 @@ class Flight(Base):
     flight_number = Column(String, index=True) # e.g. "FL123"
     date = Column(DateTime) # Date of the flight
     
-    # Times (UTC - Default)
+    # Times (Local -Default)
     scheduled_departure = Column(DateTime)
     scheduled_arrival = Column(DateTime)
     actual_departure = Column(DateTime, nullable=True)
     actual_arrival = Column(DateTime, nullable=True)
     
-    # Times (Local)
-    scheduled_departure_local = Column(DateTime, nullable=True)
-    scheduled_arrival_local = Column(DateTime, nullable=True)
-    actual_departure_local = Column(DateTime, nullable=True)
-    actual_arrival_local = Column(DateTime, nullable=True)
+    # Times (UTC)
+    scheduled_departure_utc = Column(DateTime, nullable=True)
+    scheduled_arrival_utc = Column(DateTime, nullable=True)
+    actual_departure_utc = Column(DateTime, nullable=True)
+    actual_arrival_utc = Column(DateTime, nullable=True)
     
     # New Fields
     sta_raw = Column(String) # Raw STA string e.g. "0042 : 16DEC25"
@@ -74,6 +74,11 @@ class ScheduledFlight(Base):
     departure_airport = Column(String)
     arrival_airport = Column(String)
     scheduled_departure = Column(String) # "HH:MM"
+    scheduled_arrival = Column(String, nullable=True) # "HH:MM"
+    block_time = Column(String, nullable=True) # "H:MM" or "HH:MM"
+    total_credit = Column(String, nullable=True) # "HH:MM"
+    pairing_start_date = Column(DateTime, nullable=True)
+    is_deadhead = Column(Integer, default=0) # 1 if DH, 0 if flown
     
 class IOEAssignment(Base):
     __tablename__ = 'ioe_assignments'
@@ -92,6 +97,23 @@ class DailySyncStatus(Base):
 
     def __repr__(self):
         return f"<DailySyncStatus(date='{self.date}', status='{self.status}')>"
+
+class AppMetadata(Base):
+    __tablename__ = 'app_metadata'
+    key = Column(String, primary_key=True)
+    value = Column(String)
+
+def set_metadata(session, key, value):
+    rec = session.query(AppMetadata).get(key)
+    if not rec:
+        rec = AppMetadata(key=key)
+        session.add(rec)
+    rec.value = str(value)
+    session.commit()
+
+def get_metadata(session, key, default=None):
+    rec = session.query(AppMetadata).get(key)
+    return rec.value if rec else default
 
 engine = create_engine(DB_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

@@ -38,3 +38,19 @@ To migrate to **Google Cloud SQL (PostgreSQL)**:
    * Format: `postgresql+psycopg2://user:pass@host:5432/dbname`
 2. Ensure `psycopg2-binary` is installed.
 3. The application will automatically create the necessary tables on first run.
+
+## Google Cloud Firestore Setup
+To enable cloud sync, follow the detailed instructions in [FIREBASE.md](file:///c:/Code/dumpnoc/FIREBASE.md).
+
+Quick Summary:
+1.  Create a project in the [Google Cloud Console](https://console.cloud.google.com/).
+2.  Enable the **Firestore API** and create a Firestore database (Native mode).
+3.  Go to **IAM & Admin > Service Accounts** and create a service account.
+4.  Grant the service account `Cloud Datastore User` role.
+5.  Create a key (JSON) for the service account and download it.
+6.  Place the JSON file in the project root (e.g. as `firestore_key.json`).
+7.  Update `.env` or set environment variables:
+    ```bash
+    FIRESTORE_CREDENTIALS="path/to/firestore_key.json"
+    ENABLE_CLOUD_SYNC=True
+    ```
