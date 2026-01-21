@@ -12,6 +12,15 @@ st.set_page_config(page_title="NOC Mobile Scraper", layout="wide", page_icon="�
 
 st.title("✈️ NOC Mobile Scraper & Archiver")
 
+# Global CSS for table styling
+st.markdown("""
+<style>
+    th {
+        text-align: center !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # Initialize DB
 if 'db_initialized' not in st.session_state:
     init_db()
@@ -201,7 +210,9 @@ if selected_tab == NAV_HISTORICAL:
                         })
                     
                     if crew_list:
-                        st.dataframe(pd.DataFrame(crew_list), width='stretch', hide_index=True)
+                        # Convert to HTML for consistent header centering
+                        crew_df = pd.DataFrame(crew_list)
+                        st.markdown(crew_df.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
                     else:
                         st.info("No crew parsed for this flight.")
 
@@ -530,7 +541,16 @@ elif selected_tab == NAV_PAIRINGS:
             "Actual Crew": crew_str
         })
     
-    st.dataframe(pd.DataFrame(data), width='stretch')
+    if data:
+        pairings_df = pd.DataFrame(data)
+        html_pairings = pairings_df.to_html(index=False, classes='dataframe')
+        st.markdown(f"""
+        <div style="max-height: 800px; overflow-y: auto; border: 1px solid #444; border-radius: 5px;">
+            {html_pairings}
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("No pairings found matching filters.")
     session.close()
 
 # --- TAB 4: IOE Audit ---
@@ -635,6 +655,9 @@ elif selected_tab == NAV_IOE:
                     ).fetchone()
                     
                     role = assoc.role or ""
+                    if role and "FA" in role.upper():
+                        continue
+                        
                     name_role = f"{cm.name} ({role})"
                     crew_details.append(name_role)
                     
@@ -822,7 +845,7 @@ elif selected_tab == NAV_IOE:
         if unscheduled_ioe:
             df_unscheduled = pd.DataFrame(unscheduled_ioe)
             st.warning(f"Found {len(unscheduled_ioe)} IOE flight(s) not in official assignments")
-            st.dataframe(df_unscheduled, width='stretch')
+            st.markdown(df_unscheduled.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
         else:
             st.success("✓ All IOE-flagged flights match official assignments")
     else:
@@ -922,7 +945,7 @@ elif selected_tab == NAV_IOE:
             df_adhoc = pd.DataFrame(adhoc_pairings)
             df_adhoc = df_adhoc.sort_values('IOE Legs', ascending=False)
             st.warning(f"Found {len(adhoc_pairings)} pairing(s) used for IOE but not in official list")
-            st.dataframe(df_adhoc, width='stretch')
+            st.markdown(df_adhoc.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
         else:
             st.success("✓ No ad-hoc IOE pairings found")
     else:
