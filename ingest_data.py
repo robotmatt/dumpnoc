@@ -383,16 +383,7 @@ def save_pairing(session, pairing_id, month_year, start_dates, legs, total_credi
             )
             session.add(rec)
 
-if __name__ == "__main__":
-    # Clear old data to prevent duplicates
-    session = get_session()
-    print("Clearing existing ScheduledFlight and IOEAssignment data...")
-    session.query(ScheduledFlight).delete()
-    session.query(IOEAssignment).delete()
-    session.commit()
-    
-    ingest_all(session)
-    session.close()
+
 
 def upload_ioe_to_cloud(session):
     from firestore_lib import upload_ioe_assignment
@@ -675,3 +666,54 @@ def sync_down_from_cloud(session):
     session.commit()
     print("Flights synced.")
     return stats
+
+if __name__ == "__main__":
+    from database import get_metadata
+    from firestore_lib import set_cloud_sync_enabled, is_cloud_sync_enabled
+    from config import ENABLE_CLOUD_SYNC
+    
+    # 1. Clear old data to prevent duplicates
+    session = get_session()
+    print("Clearing existing ScheduledFlight and IOEAssignment data...")
+    session.query(ScheduledFlight).delete()
+    session.query(IOEAssignment).delete()
+    session.commit()
+    
+    # 2. Ingest
+    ingest_all(session)
+    
+    # 3. Check Cloud Sync
+    # Check DB preference first (like app.py)
+    db_cloud_sync = get_metadata(session, "ui_enable_cloud_sync")
+    
+    should_sync = False
+    if db_cloud_sync is not None:
+        should_sync = (db_cloud_sync.lower() == 'true')
+    else:
+        should_sync = ENABLE_CLOUD_SYNC
+        
+    if should_sync:
+        print("\nCloud Sync is ENABLED. Uploading data to Firestore...")
+        set_cloud_sync_enabled(True)
+        
+        try:
+            print("  - Uploading Pairings...")
+            p_count = upload_pairings_to_cloud(session)
+            print(f"    Uploaded {p_count} pairing bundles.")
+            
+            print("  - Uploading IOE Assignments...")
+            i_count = upload_ioe_to_cloud(session)
+            print(f"    Uploaded {i_count} IOE assignments.")
+            
+            # Note: We probably don't need to upload ALL flight history every time ingest runs, 
+            # as ingest focus on Pairings/IOE text files.
+            
+        except Exception as e:
+            print(f"Error during cloud sync: {e}")
+            import traceback
+            traceback.print_exc()
+            
+    else:
+        print("\nCloud Sync is DISABLED. Skipping upload.")
+
+    session.close()
