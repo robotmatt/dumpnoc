@@ -111,29 +111,23 @@ selected_tab = st.radio("Navigation", tabs, index=default_nav_index, horizontal=
 
 # --- TAB 1: Historical Data ---
 if selected_tab == NAV_HISTORICAL:
-    st.header("Daily Flight Logs")
-    
-    col1, col2 = st.columns([1, 3])
-    
-    with col1:
-        # Date Picker for History
-        # Use session state default if available
+    # Header layout with Date Picker
+    h_col1, h_col2 = st.columns([3, 1])
+    with h_col1:
+        st.header("Daily Flight Logs")
+    with h_col2:
         d_val = st.session_state.get("history_date_default", datetime.today())
-        view_date = st.date_input("Select Date to View", d_val)
+        view_date = st.date_input("Select Date", d_val, label_visibility="collapsed")
         
-        # Check if we have data for this date
-        session = get_db_session()
-        view_dt = datetime.combine(view_date, datetime.min.time())
-        status_rec = session.get(DailySyncStatus, view_dt)
+    session = get_db_session()
+    view_dt = datetime.combine(view_date, datetime.min.time())
+    status_rec = session.get(DailySyncStatus, view_dt)
+    
+    if status_rec:
+        st.caption(f"Last Sync: {status_rec.last_scraped_at.strftime('%Y-%m-%d %H:%M') if status_rec.last_scraped_at else 'Unknown'}")
         
-        if status_rec:
-            st.success(f"**Status:** {status_rec.status}")
-            st.write(f"**Last Sync:** {status_rec.last_scraped_at.strftime('%Y-%m-%d %H:%M')}")
-            st.write(f"**Flights:** {status_rec.flights_found}")
-        else:
-            st.warning("No data synced for this date yet.")
-            
-    with col2:
+    # Main Content
+    with st.container():
         # Load Data
         flights_query = session.query(Flight).filter(Flight.date >= view_dt, Flight.date < view_dt + timedelta(days=1))
         df_flights = pd.read_sql(flights_query.statement, session.bind)
