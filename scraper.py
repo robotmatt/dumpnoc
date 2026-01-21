@@ -206,7 +206,7 @@ class NOCScraper:
                 for row in rows:
                     cells = row.find_all("td")
                     if len(cells) >= 2:
-                        key = cells[0].get_text(strip=True)
+                        key = cells[0].get_text(strip=True).rstrip(":")
                         val_cell = cells[1]
                         val_text = val_cell.get_text(strip=True)
                         details[key] = (val_text, val_cell)
@@ -276,6 +276,7 @@ class NOCScraper:
                         self.session.flush()
                     else:
                         flight = existing
+                        flight.tail_number = tail_number # Ensure update happens
                         flight.scheduled_departure = parsed_std
                         flight.scheduled_arrival = parsed_sta
                         flight.sta_raw = sta_val
