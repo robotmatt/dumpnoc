@@ -73,86 +73,103 @@ if global_last_sync:
 if last_sync_rec:
     st.caption(f"Last data point synced: {last_sync_rec.date.strftime('%Y-%m-%d')} ({last_sync_rec.flights_found} flights)")
 
-# Tabs
-tab_explore, tab_sync, tab_pairings, tab_ioe = st.tabs(["📅 Historical Data", "🔄 Sync Data", "📋 Pairings", "🎓 IOE Audit"])
+# --- Navigation & Query Params ---
+query_params = st.query_params
+
+# Define Tabs
+NAV_HISTORICAL = "📅 Historical Data"
+NAV_PAIRINGS = "📋 Pairings"
+NAV_IOE = "🎓 IOE Audit"
+NAV_SYNC = "🔄 Sync Data"
+
+tabs = [NAV_HISTORICAL, NAV_PAIRINGS, NAV_IOE, NAV_SYNC]
+
+# Handle incoming navigation params
+default_nav_index = 0
+if "tab" in query_params:
+    t_arg = query_params["tab"]
+    if t_arg == "pairings": default_nav_index = 1
+    elif t_arg == "ioe": default_nav_index = 2
+    elif t_arg == "sync": default_nav_index = 3
+    # else 0
+
+# Persist Filters from Params to Session State if present
+if "pairing" in query_params:
+    st.session_state["pairing_search_default"] = query_params["pairing"]
+
+if "date" in query_params:
+    try:
+        st.session_state["history_date_default"] = datetime.strptime(query_params["date"], "%Y-%m-%d").date()
+    except:
+        pass
+
+if "flight_num" in query_params:
+    st.session_state["history_flight_default"] = query_params["flight_num"]
+
+# Navigation Control
+selected_tab = st.radio("Navigation", tabs, index=default_nav_index, horizontal=True, label_visibility="collapsed")
 
 # --- TAB 1: Historical Data ---
-with tab_explore:
-    st.header("Daily Flight Logs")
-    
-    col1, col2 = st.columns([1, 3])
-    
-    with col1:
-        # Date Picker for History
-        view_date = st.date_input("Select Date to View", datetime.today())
+if selected_tab == NAV_HISTORICAL:
+    # Header layout with Date Picker
+    h_col1, h_col2 = st.columns([3, 1])
+    with h_col1:
+        st.header("Daily Flight Logs")
+    with h_col2:
+        d_val = st.session_state.get("history_date_default", datetime.today())
+        view_date = st.date_input("Select Date", d_val, label_visibility="collapsed")
         
-        # Check if we have data for this date
-        session = get_db_session()
-        view_dt = datetime.combine(view_date, datetime.min.time())
-        status_rec = session.get(DailySyncStatus, view_dt)
+    session = get_db_session()
+    view_dt = datetime.combine(view_date, datetime.min.time())
+    status_rec = session.get(DailySyncStatus, view_dt)
+    
+    if status_rec:
+        st.caption(f"Last Sync: {status_rec.last_scraped_at.strftime('%Y-%m-%d %H:%M') if status_rec.last_scraped_at else 'Unknown'}")
         
-        if status_rec:
-            st.success(f"**Status:** {status_rec.status}")
-            st.write(f"**Last Sync:** {status_rec.last_scraped_at.strftime('%Y-%m-%d %H:%M')}")
-            st.write(f"**Flights:** {status_rec.flights_found}")
-        else:
-            st.warning("No data synced for this date yet.")
-            
-    with col2:
+    # Main Content
+    with st.container():
         # Load Data
         flights_query = session.query(Flight).filter(Flight.date >= view_dt, Flight.date < view_dt + timedelta(days=1))
         df_flights = pd.read_sql(flights_query.statement, session.bind)
         session.close()
         
         if not df_flights.empty:
-            # 1. Master List
-            display_df = df_flights[['id','flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
-            # Format times
-            display_df['scheduled_departure'] = pd.to_datetime(display_df['scheduled_departure']).dt.strftime('%H:%M')
-            
-            st.subheader("Flight Schedule")
-            st.caption("Select a row to view full details")
+            # --- Selection Logic (Up Front) ---
+            def clean_fn(fn):
+                s = str(fn).strip()
+                if s.startswith("C5"): return s[2:]
+                if s.startswith("C"): return s[1:]
+                return s
 
-            event = st.dataframe(
-                display_df,
-                width='stretch',
-                hide_index=True,
-                on_select="rerun",            # This triggers the script to rerun when a row is clicked
-                selection_mode="single-row",  # Ensures only one flight is picked at a time
-                column_config={
-                    "id": None,               # Hides the ID column from the user
-                    "flight_number": "Flight #",
-                    "scheduled_departure": "Departure"
-                }
-            )
+            selected_flight_num = st.session_state.get("last_selected_flight")
             
-            st.divider()
+            # Prioritize Query Param for Flight
+            if "history_flight_default" in st.session_state:
+                 selected_flight_num = st.session_state.pop("history_flight_default") # Consume it
             
-            if event.selection.rows:
-                selected_index = event.selection.rows[0]
-                
-                # Extract the unique ID and Flight Number from the selected row
-                selected_id = display_df.iloc[selected_index]['id']
-                selected_flight_num = display_df.iloc[selected_index]['flight_number']
-      
-
-            # 2. Drill Down Selection
-            flight_opts = df_flights['flight_number'].tolist()
-            selected_flight_num = st.selectbox("Select Flight to View Details", flight_opts)
-            
+            # 1. Detailed View (Now at the top)
+            flight_opts = [clean_fn(f) for f in df_flights['flight_number'].tolist()]
+            idx_sel = 0
             if selected_flight_num:
+                path_target = clean_fn(selected_flight_num)
+                if path_target in flight_opts:
+                    idx_sel = flight_opts.index(path_target)
+            
+            selected_flight_val = st.selectbox("Select Flight to View Details", flight_opts, index=idx_sel)
+            
+            if selected_flight_val:
+                st.session_state["last_selected_flight"] = selected_flight_val
                 # Query full object
                 session = get_db_session()
-                # Use date filter to be precise (duplicate flight numbers possible on same day?)
-                # Assuming flight number unique per day or taking first
+                candidates = [selected_flight_val, f"C5{selected_flight_val}", f"C{selected_flight_val}"]
+                
                 detailed_flight = session.query(Flight).filter(
-                    Flight.flight_number == selected_flight_num,
+                    Flight.flight_number.in_(candidates),
                     Flight.date >= view_dt, 
                     Flight.date < view_dt + timedelta(days=1)
                 ).first()
                 
                 if detailed_flight:
-                    # -- Header --
                     st.subheader(f"✈️ Flight {detailed_flight.flight_number}")
                     
                     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
@@ -160,8 +177,6 @@ with tab_explore:
                     m_col2.metric("Type/Ver", f"{detailed_flight.aircraft_type or '--'} / {detailed_flight.version or '--'}")
                     m_col3.metric("Route", f"{detailed_flight.departure_airport} ➝ {detailed_flight.arrival_airport}")
                     
-                    # Times (STD / STA)
-                    # Helper
                     def fmt_pair(local_dt, utc_dt):
                         l = local_dt.strftime('%H:%M') if local_dt else "--"
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
@@ -170,18 +185,13 @@ with tab_explore:
                     m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
                     st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
 
-                    
-                    # -- Crew Section --
                     st.markdown("### 👨‍✈️ Crew")
-                    # We need to query the association to get flags
                     from database import flight_crew_association
                     stmt = flight_crew_association.select().where(flight_crew_association.c.flight_id == detailed_flight.id)
                     assoc_rows = session.execute(stmt).fetchall()
                     
                     crew_list = []
                     for row in assoc_rows:
-                        # Get member details
-                        # cm = session.query(CrewMember).get(row.crew_id)
                         cm = session.get(CrewMember, row.crew_id)
                         crew_list.append({
                             "Role": row.role,
@@ -195,24 +205,79 @@ with tab_explore:
                     else:
                         st.info("No crew parsed for this flight.")
 
-                    # -- Operational Data --
                     st.markdown("### 📋 Operational Data")
-                    with st.expander("Passenger Data (Pax)", expanded=False):
-                        st.text(detailed_flight.pax_data or "No Pax Data")
-                    
-                    with st.expander("Load Sheet", expanded=False):
-                        st.text(detailed_flight.load_data or "No Load Data")
-                        
-                    with st.expander("Notes", expanded=False):
-                        st.text(detailed_flight.notes_data or "No Notes")
-                        
+                    c_op1, c_op2, c_op3 = st.columns(3)
+                    with c_op1:
+                        with st.expander("Passenger Data (Pax)"):
+                             st.text(detailed_flight.pax_data or "No Pax Data")
+                    with c_op2:
+                        with st.expander("Load Sheet"):
+                             st.text(detailed_flight.load_data or "No Load Data")
+                    with c_op3:
+                        with st.expander("Notes"):
+                             st.text(detailed_flight.notes_data or "No Notes")
                 session.close()
-                
+
+            # 2. Historical Schedule Table (HTML for same-window links)
+            st.divider()
+            st.subheader("Daily Flight Schedule")
+            
+            # Sorting for Schedule
+            col_sort1, col_sort2 = st.columns([2, 1])
+            with col_sort1:
+                hist_sort_col = st.selectbox("Sort Schedule By", ["Departure", "Flight #", "Status", "Tail"], index=0)
+            with col_sort2:
+                hist_sort_order = st.radio("Hist Order", ["Ascending", "Descending"], horizontal=True, index=0, key="hist_sort_order")
+            
+            # Map display names to internal names
+            sort_map = {
+                "Departure": "scheduled_departure",
+                "Flight #": "flight_num_clean",
+                "Status": "status",
+                "Tail": "tail_number"
+            }
+            
+            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
+            display_df['flight_num_clean'] = display_df['flight_number'].apply(clean_fn).astype(int, errors='ignore')
+            
+            # Sort the data
+            is_asc_hist = (hist_sort_order == "Ascending")
+            display_df = display_df.sort_values(by=sort_map[hist_sort_col], ascending=is_asc_hist)
+            
+            # Format display columns
+            display_df['formatted_departure'] = pd.to_datetime(display_df['scheduled_departure']).dt.strftime('%H:%M')
+            
+            # Create the link HTML
+            display_df['Flight #'] = display_df.apply(
+                lambda r: f"<a href='/?tab=historical&date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
+                axis=1
+            )
+            
+            # Rename for final presentation
+            render_df = display_df[['Flight #', 'formatted_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].rename(columns={
+                'formatted_departure': 'Departure',
+                'departure_airport': 'Dep',
+                'arrival_airport': 'Arr',
+                'tail_number': 'Tail',
+                'status': 'Status'
+            })
+            
+            html_table = render_df.to_html(escape=False, index=False, classes='dataframe')
+            
+            # Scrollable container
+            st.markdown(f"""
+            <div style="max-height: 500px; overflow-y: auto; border: 1px solid #444; border-radius: 5px;">
+                {html_table}
+            </div>
+            """, unsafe_allow_html=True)
+            st.caption("Click a Flight # to view details above in this window.")
         else:
             st.info("No flights recorded for this date.")
+                
+
 
 # --- TAB 2: Sync Data ---
-with tab_sync:
+elif selected_tab == NAV_SYNC:
     st.header("Sync Settings")
     
     # Cloud Configuration Check (using dynamic setting)
@@ -267,10 +332,6 @@ with tab_sync:
                         
                         s_dt = datetime.combine(curr, datetime.min.time())
                         scraper.scrape_date(s_dt)
-                        
-                        # Optional: Auto-push to cloud if enabled?
-                        # For now, let's keep it manual or rely on scraper implementation if we changed it. 
-                        # But we didn't change scraper.py to auto-push yet.
                         
                         days_done += 1
                         progress_bar.progress(days_done / total_days)
@@ -341,11 +402,7 @@ with tab_sync:
                 with st.spinner("Uploading Historical Flights..."):
                     from ingest_data import upload_flights_to_cloud
                     session = get_db_session()
-                    # optionally filter by date range selected above?
-                    # Let's use the date picker from scraper section if user wants, 
-                    # but maybe default to all or a different picker.
-                    # For simplicity, let's just upload ALL for now or reuse the picker?
-                    # Reusing the picker seems smart.
+                    
                     s_dt = datetime.combine(start_date, datetime.min.time())
                     e_dt = datetime.combine(end_date, datetime.min.time()) + timedelta(days=1)
                     
@@ -372,7 +429,7 @@ with tab_sync:
 
 # --- TAB 3: Pairings ---
 
-with tab_pairings:
+elif selected_tab == NAV_PAIRINGS:
     st.header("Scheduled Pairings")
     from database import ScheduledFlight
     
@@ -383,7 +440,14 @@ with tab_pairings:
     with col1:
         # Get unique pairing numbers
         pairing_nums = [r[0] for r in session.query(ScheduledFlight.pairing_number).distinct()]
-        sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums), key="pairing_search")
+        
+        # Determine Default
+        p_idx = 0
+        p_arg = st.session_state.get("pairing_search_default", "All")
+        if p_arg in pairing_nums:
+            p_idx = (["All"] + sorted(pairing_nums)).index(p_arg)
+        
+        sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums), index=p_idx, key="pairing_search")
     
     with col2:
         # Get distinct months from ScheduledFlight
@@ -392,11 +456,9 @@ with tab_pairings:
         for d in pairing_dates_q:
             if d[0]:
                 bp_year, bp_month = get_bid_period_from_date(d[0])
-                # Create a dummy date for formatting (use day 1)
                 dt_obj = datetime(bp_year, bp_month, 1)
                 months_set.add(dt_obj.strftime("%B %Y"))
         
-        # Ensure current month is an option (using current bid period)
         curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
         current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
         months_set.add(current_month_str)
@@ -416,19 +478,15 @@ with tab_pairings:
     # Build Query
     query = session.query(ScheduledFlight)
     
-    # Logic Change: Grouping by Pairing Instance
     if sel_pairing != "All":
         query = query.filter(ScheduledFlight.pairing_number == sel_pairing)
     
     if sel_date:
-        # Show all pairings starting on this date (overrides/refines month)
         query = query.filter(ScheduledFlight.pairing_start_date == datetime.combine(sel_date, datetime.min.time()))
     elif sel_month_str:
-        # Filter by month if no specific date is selected
         sel_month_dt = datetime.strptime(sel_month_str, "%B %Y")
         bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
         
-        # Convert to datetime for comparison (inclusive of start, exclusive of end+1 day)
         start_dt = datetime.combine(bp_start, datetime.min.time())
         end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
@@ -443,11 +501,8 @@ with tab_pairings:
         ScheduledFlight.scheduled_departure
     ).limit(1000).all()
     
-    # Correlate
     data = []
     for sf in scheduled_rows:
-        # Find Actual (Handle 'C' or 'C5' prefix mismatch)
-        # Scraped flights often have 'C5' prefix (e.g. C54945)
         candidates = [sf.flight_number, f"C5{sf.flight_number}", f"C{sf.flight_number}"]
         actual = session.query(Flight).filter(
             Flight.flight_number.in_(candidates), 
@@ -458,7 +513,6 @@ with tab_pairings:
         status = "Scheduled"
         if actual:
             status = "Flown"
-            # Get crew names
             crews = [c.name for c in actual.crew_members]
             crew_str = "; ".join(crews)
         
@@ -480,9 +534,9 @@ with tab_pairings:
     session.close()
 
 # --- TAB 4: IOE Audit ---
-with tab_ioe:
+elif selected_tab == NAV_IOE:
     st.header("IOE Audit Report")
-    from database import IOEAssignment, flight_crew_association
+    from database import IOEAssignment, flight_crew_association, ScheduledFlight
     from sqlalchemy import extract
     
     session = get_db_session()
@@ -490,7 +544,6 @@ with tab_ioe:
     # 1. Bid Period Selector
     # Get distinct months from assignments
     dates_q = session.query(IOEAssignment.start_date).all()
-    # Unique months set
     months_set = set()
     for d in dates_q:
         if d[0]:
@@ -498,7 +551,6 @@ with tab_ioe:
             dt_obj = datetime(bp_year, bp_month, 1)
             months_set.add(dt_obj.strftime("%B %Y"))
             
-    # Ensure current month is an option
     curr_bp_year, curr_bp_month = get_bid_period_from_date(datetime.now().date())
     current_month_str = datetime(curr_bp_year, curr_bp_month, 1).strftime("%B %Y")
     months_set.add(current_month_str)
@@ -512,7 +564,6 @@ with tab_ioe:
         sel_month_dt = datetime.strptime(selected_month_str, "%B %Y")
         bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
         
-        # Convert to datetime for comparison
         start_dt = datetime.combine(bp_start, datetime.min.time())
         end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
@@ -536,13 +587,11 @@ with tab_ioe:
     for assign in assignments:
         start_dt = assign.start_date
         
-        # Use pairing_start_date for precise leg matching
         legs = session.query(ScheduledFlight).filter(
             ScheduledFlight.pairing_number == assign.pairing_number,
             ScheduledFlight.pairing_start_date == start_dt
         ).order_by(ScheduledFlight.date, ScheduledFlight.scheduled_departure).all()
         
-        # Fallback to date range if no legs found with specific start date (legacy data)
         if not legs:
             end_dt = start_dt + timedelta(days=5)
             legs = session.query(ScheduledFlight).filter(
@@ -555,111 +604,104 @@ with tab_ioe:
         legs_flown_by_student = 0
         legs_marked_ioe = 0
         
-        details = []
+        details_html = []
         
         for leg in legs:
             leg_date = leg.date
             
-            # Check Actual (Handle 'C' or 'C5' prefix) - do this for both past and future
+            # Link Generation for Flight
+            flight_link = f"<a href='/?tab=historical&date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
+            
             candidates = [leg.flight_number, f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(
                 Flight.flight_number.in_(candidates), 
                 Flight.date == leg.date
             ).first()
             
-            # Future Check - but still verify IOE if crew data exists
+            crew_details = []
+            has_ioe_fo = False
+            has_ioe_any = False
+            captain_name = "Unknown"
+            fo_found = False
+            ioe_crew_names = []
+
+            if actual:
+                for cm in actual.crew_members:
+                    assoc = session.execute(
+                        flight_crew_association.select().where(
+                            (flight_crew_association.c.flight_id == actual.id) &
+                            (flight_crew_association.c.crew_id == cm.id)
+                        )
+                    ).fetchone()
+                    
+                    role = assoc.role or ""
+                    name_role = f"{cm.name} ({role})"
+                    crew_details.append(name_role)
+                    
+                    r_up = role.upper()
+                    if "CAPTAIN" in r_up or "CA" == r_up:
+                         captain_name = cm.name
+                    
+                    if "FIRST OFFICER" in r_up or "FO" in r_up:
+                         fo_found = True
+                    
+                    if assoc and "IOE" in (assoc.flags or ""):
+                        ioe_crew_names.append(name_role)
+                        has_ioe_any = True
+                        if "FIRST OFFICER" in r_up or "FO" in r_up:
+                            has_ioe_fo = True
+            
             if leg_date.date() > now.date():
                 if actual:
-                    # Check if there's an FO with IOE flag and collect crew names
-                    has_ioe_fo = False
-                    ioe_crew_names = []
-                    
-                    for cm in actual.crew_members:
-                        assoc = session.execute(
-                            flight_crew_association.select().where(
-                                (flight_crew_association.c.flight_id == actual.id) &
-                                (flight_crew_association.c.crew_id == cm.id)
-                            )
-                        ).fetchone()
-                        
-                        if assoc and "IOE" in (assoc.flags or ""):
-                            ioe_crew_names.append(f"{cm.name} ({assoc.role})")
-                            if "FO" in (assoc.role or "").upper():
-                                has_ioe_fo = True
-                    
                     if has_ioe_fo:
                         legs_marked_ioe += 1
-                        details.append(f"{leg.flight_number}: Future Trip (IOE: {', '.join(ioe_crew_names)})")
+                        details_html.append(f"{flight_link}: Future Trip (IOE: {', '.join(ioe_crew_names)})")
                     else:
-                        details.append(f"{leg.flight_number}: Future Trip (No IOE FO)")
+                        fo_status = "No FO" if not fo_found else "FO Present (No IOE)"
+                        details_html.append(f"{flight_link}: Future Trip (CA: {captain_name}; {fo_status})")
                 else:
-                    details.append(f"{leg.flight_number}: Future Trip (Not Scraped)")
+                    details_html.append(f"{flight_link}: Future Trip (Not Scraped)")
                 
                 total_future_legs_global += 1
                 continue
             
-            # Check Actual (Handle 'C' or 'C5' prefix)
-            candidates = [leg.flight_number, f"C5{leg.flight_number}", f"C{leg.flight_number}"]
-            actual = session.query(Flight).filter(
-                Flight.flight_number.in_(candidates), 
-                Flight.date == leg.date
-            ).first()
-            
             leg_status = "Not Scraped"
             
-            # In Progress Check (Today)
             if not actual and leg_date.date() == now.date():
                  leg_status = "In Progress (Not Scraped)"
             elif actual:
-                 # Check student presence
                  student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
                  
                  if student_present:
                      legs_flown_by_student += 1
                      leg_status = "Flown"
-                     
-                     # Check IOE Flag on ANY crew member (not just the student)
-                     # This catches cases where CA has IOE flag but FO doesn't, etc.
-                     is_ioe = False
-                     ioe_crew_names = []
-                     
-                     for cm in actual.crew_members:
-                         # Get association details for this crew member
-                         assoc = session.execute(
-                             flight_crew_association.select().where(
-                                 (flight_crew_association.c.flight_id == actual.id) &
-                                 (flight_crew_association.c.crew_id == cm.id)
-                             )
-                         ).fetchone()
-                         
-                         if assoc and "IOE" in (assoc.flags or ""):
-                             is_ioe = True
-                             ioe_crew_names.append(f"{cm.name} ({assoc.role})")
-                     
-                     if is_ioe:
+                     if has_ioe_any:
                          legs_marked_ioe += 1
                          leg_status += f" (IOE: {', '.join(ioe_crew_names)})"
                      else:
                          total_flown_not_ioe_global += 1
-                         leg_status += " (No IOE flags)"
+                         leg_status += f" (No IOE flags, Crew: {'; '.join(crew_details)})"
                  else:
                      leg_status = "Student Missing"
             
-            details.append(f"{leg.flight_number}: {leg_status}")
+            details_html.append(f"{flight_link}: {leg_status}")
 
         total_legs_global += total_legs
         total_ioe_verified_global += legs_marked_ioe
         
         if total_legs == 0:
-            details.append("⚠️ No schedule data found for this pairing")
+            details_html.append("⚠️ No schedule data found for this pairing")
 
+        # Pairing Link
+        p_link = f"<a href='/?tab=pairings&pairing={assign.pairing_number}' target='_self' style='text-decoration:none; color:#E694FF;'>{assign.pairing_number}</a>"
+        
         audit_results.append({
             "Check Airman": assign.employee_id,
-            "Pairing": assign.pairing_number,
+            "Pairing": p_link,
             "Start": start_dt.strftime("%Y-%m-%d"),
             "Legs Count": total_legs,
             "IOE Verified": legs_marked_ioe,
-            "Details": "; ".join(details)
+            "Details": f"<div style='line-height:1.6;'>{'<br>'.join(details_html)}</div>"
         })
         
     session.close()
@@ -678,8 +720,30 @@ with tab_ioe:
     m3.metric("IOE Verified Rate", f"{rate:.1f}%")
     m4.metric("Future Trip Rate", f"{future_rate:.1f}%")
     
-    df_audit = pd.DataFrame(audit_results)
-    st.dataframe(df_audit, width='stretch')
+    # HTML Table Rendering with Sorting
+    if audit_results:
+        df_audit = pd.DataFrame(audit_results)
+        
+        # Sorting UI
+        st.write("---")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            sort_col = st.selectbox("Sort Table By", ["Start", "Legs Count", "Check Airman", "IOE Verified"], index=0)
+        with c2:
+            sort_order = st.radio("Order", ["Ascending", "Descending"], horizontal=True, index=0)
+        
+        is_asc = (sort_order == "Ascending")
+        df_audit = df_audit.sort_values(by=sort_col, ascending=is_asc)
+
+        # Use simple pandas to html
+        html = df_audit.to_html(escape=False, index=False, classes='dataframe')
+        st.markdown(f"""
+        <div style="max-height: 600px; overflow-y: auto; border: 1px solid #444; border-radius: 5px;">
+            {html}
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.info("No assignments found for this period.")
     
     st.caption("Auto-generated audit based on scraped flight logs vs assigned IOE pairings.")
     
