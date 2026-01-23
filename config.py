@@ -21,3 +21,6 @@ NOC_PASSWORD = os.getenv("NOC_PASSWORD")
 # Firestore
 FIRESTORE_CREDENTIALS = os.getenv("FIRESTORE_CREDENTIALS", "firestore_key.json")
 ENABLE_CLOUD_SYNC = os.getenv("ENABLE_CLOUD_SYNC", "False").lower() in ("true", "1", "t")
+
+# Scheduling
+SCRAPE_INTERVAL_HOURS = int(os.getenv("SCRAPE_INTERVAL_HOURS", "1"))

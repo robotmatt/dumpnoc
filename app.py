@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
+import json
 from datetime import datetime, timedelta
 from config import NOC_USERNAME, NOC_PASSWORD
 from scraper import NOCScraper
-from database import get_session, Flight, CrewMember, DailySyncStatus, init_db
+from database import get_session, Flight, CrewMember, DailySyncStatus, init_db, FlightHistory
 from sqlalchemy import desc, extract
 from bid_periods import get_bid_period_date_range, get_bid_period_from_date
 
@@ -65,6 +66,26 @@ with st.sidebar:
     
     st.divider()
     st.info("NOC Mobile Scraper v1.2")
+    
+    st.divider()
+    st.header("Scheduler Config")
+    
+    from config import SCRAPE_INTERVAL_HOURS
+    from database import get_metadata, set_metadata, get_session
+    
+    session = get_session()
+    current_interval_db = get_metadata(session, "scrape_interval_hours")
+    session.close()
+    
+    initial_interval = int(current_interval_db) if current_interval_db else SCRAPE_INTERVAL_HOURS
+    
+    new_interval = st.number_input("Scrape Interval (Hours)", min_value=1, max_value=24, value=initial_interval)
+    
+    if new_interval != initial_interval:
+        session = get_session()
+        set_metadata(session, "scrape_interval_hours", str(new_interval))
+        session.close()
+        st.success(f"Updated! Restart scheduler.")
 
 if not username or not password:
     st.warning("Please enter NOC Mobile credentials in the sidebar to proceed.")
@@ -216,6 +237,58 @@ if selected_tab == NAV_HISTORICAL:
                     else:
                         st.info("No crew parsed for this flight.")
 
+                    # Flight History
+                    history_records = session.query(FlightHistory).filter_by(flight_id=detailed_flight.id).order_by(desc(FlightHistory.timestamp)).all()
+                    if history_records:
+                        with st.expander("📜 Flight Change History"):
+                            for h in history_records:
+                                st.markdown(f"**Changed detected at:** {h.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
+                                
+                                # Use description for quick view
+                                st.caption(h.description)
+                                
+                                try:
+                                    changes = json.loads(h.changes_json)
+                                    
+                                    # Handle specialized Crew display separately if present
+                                    if "Crew" in changes:
+                                        crew_change = changes.pop("Crew")
+                                        c_old = crew_change.get("old", [])
+                                        c_new = crew_change.get("new", [])
+                                        
+                                        st.write("---")
+                                        st.write("**👨‍✈️ Crew Changed:**")
+                                        h_col1, h_col2 = st.columns(2)
+                                        with h_col1:
+                                            st.caption("Former Crew")
+                                            if c_old:
+                                                st.dataframe(pd.DataFrame(c_old), use_container_width=True, hide_index=True)
+                                            else:
+                                                st.write("None / Initial Scrape")
+                                        with h_col2:
+                                            st.caption("New Crew")
+                                            if c_new:
+                                                st.dataframe(pd.DataFrame(c_new), use_container_width=True, hide_index=True)
+                                            else:
+                                                st.write("Crew Removed")
+                                    
+                                    # Display other scalar changes
+                                    if changes:
+                                        st.write("**📝 Other Field Changes:**")
+                                        # Convert dict to list of dicts for table
+                                        scalar_diffs = []
+                                        for k, v in changes.items():
+                                            scalar_diffs.append({
+                                                "Field": k,
+                                                "Old Value": v.get("old", "None"),
+                                                "New Value": v.get("new", "None")
+                                            })
+                                        st.table(pd.DataFrame(scalar_diffs))
+                                        
+                                except Exception as e:
+                                    st.error(f"Error parsing history: {e}")
+                                st.divider()
+
                     st.markdown("### 📋 Operational Data")
                     c_op1, c_op2, c_op3 = st.columns(3)
                     with c_op1:
@@ -314,6 +387,7 @@ elif selected_tab == NAV_SYNC:
             end_date = st.date_input("End Date", datetime.today())
     else:
         st.info(f"Will sync data for: **{start_date.strftime('%Y-%m-%d')}**")
+    
 
     if st.button(f"Start Scraper Sync ({sync_mode})", type="primary"):
         status_area = st.empty()

@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Table
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import DB_URL
@@ -12,6 +13,14 @@ flight_crew_association = Table(
     Column('role', String), # e.g., Captain, First Officer, Cabin Crew
     Column('flags', String) # e.g., "IOE, L"
 )
+
+class FlightHistory(Base):
+    __tablename__ = 'flight_history'
+    id = Column(Integer, primary_key=True)
+    flight_id = Column(Integer, ForeignKey('flights.id'))
+    timestamp = Column(DateTime, default=datetime.now)
+    changes_json = Column(String) # JSON containing dict of changes: {'field': {'old': val, 'new': val}, ...}
+    description = Column(String) # Human readable summary
 
 class Flight(Base):
     __tablename__ = 'flights'
