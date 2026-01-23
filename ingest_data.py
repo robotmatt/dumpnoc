@@ -693,6 +693,24 @@ if __name__ == "__main__":
         should_sync = ENABLE_CLOUD_SYNC
         
     if should_sync:
+        from firestore_lib import get_cloud_metadata
+        local_sync = get_metadata(session, "last_successful_sync")
+        cloud_sync = get_cloud_metadata("last_successful_sync")
+        
+        if local_sync and cloud_sync:
+            try:
+                l_dt = datetime.strptime(local_sync, '%Y-%m-%d %H:%M:%S')
+                c_dt = datetime.strptime(cloud_sync, '%Y-%m-%d %H:%M:%S')
+                if l_dt < c_dt:
+                    print(f"\n⚠️  WARNING: Local data ({local_sync}) is older than cloud data ({cloud_sync}).")
+                    choice = input("Mirroring will overwrite newer data in the cloud. Proceed? (y/N): ")
+                    if choice.lower() != 'y':
+                        print("Sync aborted by user.")
+                        should_sync = False
+            except:
+                pass
+
+    if should_sync:
         print("\nCloud Sync is ENABLED. Uploading data to Firestore...")
         set_cloud_sync_enabled(True)
         

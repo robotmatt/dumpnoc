@@ -123,6 +123,18 @@ def upload_metadata(key, value):
     except Exception as e:
         print(f"Error uploading metadata {key}: {e}")
 
+def get_cloud_metadata(key):
+    """Retrieves a single metadata value from Firestore."""
+    db = get_db()
+    if not db: return None
+    try:
+        doc = db.collection('metadata').document(str(key)).get()
+        if doc.exists:
+            return doc.to_dict().get("value")
+    except Exception as e:
+        print(f"Error getting cloud metadata {key}: {e}")
+    return None
+
 # --- Download Functions for Two-Way Sync ---
 
 def download_daily_flights():
