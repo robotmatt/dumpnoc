@@ -363,7 +363,25 @@ elif selected_tab == NAV_SYNC:
         st.caption("Enable cloud sync in the sidebar to use these features.")
     else:
         # Unified Sync Button
-        if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch'):
+        from firestore_lib import get_cloud_metadata
+        local_sync = get_metadata(session, "last_successful_sync")
+        cloud_sync = get_cloud_metadata("last_successful_sync")
+        
+        can_proceed = True
+        if local_sync and cloud_sync:
+            try:
+                l_dt = datetime.strptime(local_sync, '%Y-%m-%d %H:%M:%S')
+                c_dt = datetime.strptime(cloud_sync, '%Y-%m-%d %H:%M:%S')
+                
+                if l_dt < c_dt:
+                    st.warning(f"⚠️ **Cloud Data is Newer!**\n\nYour local data (**{local_sync}**) is older than the data in the cloud (**{cloud_sync}**). Mirroring will overwrite newer cloud data with your older local data.")
+                    if not st.checkbox("I understand local data is older and I want to mirror it anyway.", key="confirm_mirror_older"):
+                        can_proceed = False
+                        st.info("Please confirm the checkbox above to enable the Full Sync button.")
+            except:
+                pass
+
+        if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch', disabled=not can_proceed):
             with st.status("Performing Full Sync...", expanded=True) as status:
                 session = get_db_session()
                 from ingest_data import upload_ioe_to_cloud, upload_pairings_to_cloud, upload_flights_to_cloud, upload_metadata_to_cloud
