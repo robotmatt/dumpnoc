@@ -491,6 +491,18 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
             })
         flight_data["crew"] = crew_list
         
+        # Add Flight History
+        from database import FlightHistory
+        history_recs = session.query(FlightHistory).filter_by(flight_id=f.id).all()
+        history_list = []
+        for h in history_recs:
+             history_list.append({
+                 "timestamp": h.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                 "changes_json": h.changes_json,
+                 "description": h.description
+             })
+        flight_data["history"] = history_list
+        
         daily_bundles[date_str][f.flight_number] = flight_data
         
     count = 0
@@ -659,6 +671,31 @@ def sync_down_from_cloud(session):
                             flags=c_dict.get("flags", "")
                         )
                         session.execute(ins)
+
+                    # Sync History
+                    history_list = f_data.get("history", [])
+                    if history_list and existing_f.id:
+                        from database import FlightHistory
+                        # Get existing timestamps to prevent duplicates
+                        existing_timestamps = set(
+                            [h.timestamp.strftime('%Y-%m-%d %H:%M:%S') for h in 
+                             session.query(FlightHistory).filter_by(flight_id=existing_f.id).all()]
+                        )
+                        
+                        for h_data in history_list:
+                            ts_str = h_data.get("timestamp")
+                            if ts_str not in existing_timestamps:
+                                try:
+                                    ts = datetime.datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                                    new_h = FlightHistory(
+                                        flight_id=existing_f.id,
+                                        timestamp=ts,
+                                        changes_json=h_data.get("changes_json"),
+                                        description=h_data.get("description")
+                                    )
+                                    session.add(new_h)
+                                except Exception as e:
+                                    print(f"Error restoring history record: {e}")
 
         except Exception as e:
             print(f"Error restoring flights for {doc_id}: {e}")
