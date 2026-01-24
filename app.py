@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import json
 from datetime import datetime, timedelta
-from config import NOC_USERNAME, NOC_PASSWORD
+from config import NOC_USERNAME, NOC_PASSWORD, VERSION
 from scraper import NOCScraper
 from database import get_session, Flight, CrewMember, DailySyncStatus, init_db, FlightHistory
 from sqlalchemy import desc, extract
@@ -65,7 +65,7 @@ with st.sidebar:
     set_cloud_sync_enabled(cloud_sync_enabled)
     
     st.divider()
-    st.info("NOC Mobile Scraper v1.2")
+    st.info("NOC Mobile Scraper v1.3")
     
     st.divider()
     st.header("Scheduler Config")

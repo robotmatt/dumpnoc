@@ -24,3 +24,6 @@ ENABLE_CLOUD_SYNC = os.getenv("ENABLE_CLOUD_SYNC", "False").lower() in ("true", 
 
 # Scheduling
 SCRAPE_INTERVAL_HOURS = int(os.getenv("SCRAPE_INTERVAL_HOURS", "1"))
+
+# App Version Number
+VERSION = "v1.3"
