@@ -215,25 +215,43 @@ class NOCScraper:
                 # Parse specific fields
                 std_str = details.get("STD", ["", None])[0] # e.g. "2159"
                 sta_val = details.get("STA", ["", None])[0]
+                atd_str = details.get("ATD", ["", None])[0]
+                ata_val = details.get("ATA", ["", None])[0]
+                
+                # Check for Cancelled Style (Red Background)
+                is_cancelled = False
+                header_style = item.find("div", class_="ItemHeader").get("style", "")
+                if header_style and ("#FA0000" in header_style or "rgb(250, 0, 0)" in header_style):
+                    is_cancelled = True
                 
                 # Parse Times
                 parsed_std = self._parse_time(date_obj, std_str)
+                parsed_atd = self._parse_time(date_obj, atd_str)
+                
                 parsed_sta = None
-                if sta_val:
-                    # Reuse STA logic
+                parsed_ata = None
+                
+                # Helper for Arrival Time Parsing
+                def parse_arrival(val_str, base_date):
+                    if not val_str: return None
                     try:
-                        sta_val_clean = sta_val.strip()
-                        if " : " in sta_val_clean:
-                            parts = sta_val_clean.split(" : ")
+                        val_clean = val_str.strip()
+                        if " : " in val_clean:
+                            parts = val_clean.split(" : ")
                             if len(parts) == 2:
                                 t_str, d_str = parts
                                 dt_obj = datetime.strptime(d_str, "%d%b%y")
                                 h = int(t_str[:2]); m = int(t_str[2:])
-                                parsed_sta = dt_obj.replace(hour=h, minute=m)
-                        elif len(sta_val_clean) == 4 and sta_val_clean.isdigit():
-                            h = int(sta_val_clean[:2]); m = int(sta_val_clean[2:])
-                            parsed_sta = date_obj.replace(hour=h, minute=m)
-                    except: pass
+                                return dt_obj.replace(hour=h, minute=m)
+                        elif len(val_clean) == 4 and val_clean.isdigit():
+                            h = int(val_clean[:2]); m = int(val_clean[2:])
+                            return base_date.replace(hour=h, minute=m)
+                    except: 
+                        return None
+                    return None
+
+                parsed_sta = parse_arrival(sta_val, date_obj)
+                parsed_ata = parse_arrival(ata_val, date_obj)
 
                 # --- Extract Details Early for Matching ---
                 tail_number = details.get("Registration", ["", None])[0]
@@ -246,6 +264,17 @@ class NOCScraper:
                 ver_val = details.get("Version", ["", None])[0]
                 if not isinstance(notes_val, str): notes_val = ""
 
+                # Compute Status
+                status_str = "Scheduled"
+                if is_cancelled:
+                    status_str = "Cancelled"
+                elif parsed_atd:
+                    # If it has departed
+                    if parsed_std and parsed_atd > parsed_std + timedelta(minutes=15): # 15 min buffer for 'Delay'?
+                         status_str = "Delayed"
+                    else:
+                         status_str = "Flown"
+                
                 # --- DB Interaction ---
                 # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
                 # This prevents red-eye flights from being duplicated across midnight
@@ -279,20 +308,23 @@ class NOCScraper:
                             tail_number=tail_number,
                             scheduled_departure=parsed_std,
                             scheduled_arrival=parsed_sta,
+                            actual_departure=parsed_atd,
+                            actual_arrival=parsed_ata,
                             departure_airport=dep_apt,
                             arrival_airport=arr_apt,
+                            
                             sta_raw=sta_val,
                             pax_data=pax_val,
                             load_data=load_val,
                             notes_data=str(notes_val),
                             aircraft_type=type_val,
-                            version=ver_val
+                            version=ver_val,
+                            status=status_str
                         )
                         self.session.add(flight)
                         self.session.flush()
                         
-                        # --- New Crew Parsing (Initial) ---
-                        # We still need to parse crew for the first insert
+                        existing = flight # Now existing is valid for the rest of the flow                     # We still need to parse crew for the first insert
                         # (Code similar to below but without history check)
                         # For simplicity, we can let the history-check block handle "Change from None to X" 
                         # but "existing" is None effectively.
@@ -309,21 +341,17 @@ class NOCScraper:
                         "Tail Number": ("tail_number", tail_number),
                         "Scheduled Departure": ("scheduled_departure", parsed_std),
                         "Scheduled Arrival": ("scheduled_arrival", parsed_sta),
+                        "Actual Departure": ("actual_departure", parsed_atd),
+                        "Actual Arrival": ("actual_arrival", parsed_ata),
                         "Departure Airport": ("departure_airport", dep_apt),
                         "Arrival Airport": ("arrival_airport", arr_apt),
                         "Aircraft Type": ("aircraft_type", type_val),
                         "Version": ("version", ver_val),
-                        "Status": ("status", details.get("Status", ["", None])[0] if "Status" in details else None)
+                        "Status": ("status", status_str)
                     }
                     
                     for label, (attr, new_val) in fields_to_check.items():
                         old_val = getattr(existing, attr)
-                        # Handle None vs "" vs None comparisons? 
-                        # Database often stores None. Scraper might yield "" or None.
-                        # Normalize to string if string, or keep objects
-                        
-                        # Special handling for dates to avoid microsecond/timezone false positives?
-                        # They are naive datetime objects usually.
                         
                         if old_val != new_val:
                             # Avoid false positives like None vs ""?

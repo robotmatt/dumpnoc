@@ -202,6 +202,18 @@ if selected_tab == NAV_HISTORICAL:
                 if detailed_flight:
                     st.subheader(f"✈️ Flight {detailed_flight.flight_number}")
                     
+                    # Status Badge
+                    if detailed_flight.status:
+                        s_up = detailed_flight.status.upper()
+                        if "CANCELLED" in s_up:
+                            st.error(f"⚠️ STATUS: {detailed_flight.status}")
+                        elif "DELAYED" in s_up:
+                            st.warning(f"🕒 STATUS: {detailed_flight.status}")
+                        elif "FLOWN" in s_up:
+                            st.success(f"✅ STATUS: {detailed_flight.status}")
+                        else:
+                            st.info(f"STATUS: {detailed_flight.status}")
+
                     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
                     m_col1.metric("Tail", detailed_flight.tail_number or "N/A")
                     m_col2.metric("Type/Ver", f"{detailed_flight.aircraft_type or '--'} / {detailed_flight.version or '--'}")
@@ -212,10 +224,17 @@ if selected_tab == NAV_HISTORICAL:
                         l = local_dt.strftime('%H:%M') if local_dt else "--"
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
                         return f"{l} (L) | {u} (Z)"
+                    
+                    def fmt_actual(local_dt):
+                        return local_dt.strftime('%H:%M') if local_dt else "--"
 
-                    m_col_t1, m_col_t2 = st.columns(2)
-                    m_col_t1.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
-                    m_col_t2.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
+                    # Row for Times
+                    c_t1, c_t2, c_t3, c_t4 = st.columns(4)
+                    c_t1.metric("Dep Scheduled", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
+                    c_t2.metric("Dep Actual", fmt_actual(detailed_flight.actual_departure))
+                    
+                    c_t3.metric("Arr Scheduled", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
+                    c_t4.metric("Arr Actual", fmt_actual(detailed_flight.actual_arrival))
 
                     st.markdown("### 👨‍✈️ Crew")
                     from database import flight_crew_association
