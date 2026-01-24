@@ -71,7 +71,7 @@ def render_historical_tab():
                     # Status Badge
                     if detailed_flight.status:
                         s_up = detailed_flight.status.upper()
-                        if "CANCELLED" in s_up:
+                        if "CANCELED" in s_up:
                             st.error(f"⚠️ STATUS: {detailed_flight.status}")
                         elif "DELAYED" in s_up:
                             st.warning(f"🕒 STATUS: {detailed_flight.status}")

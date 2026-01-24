@@ -218,11 +218,15 @@ class NOCScraper:
                 atd_str = details.get("ATD", ["", None])[0]
                 ata_val = details.get("ATA", ["", None])[0]
                 
-                # Check for Cancelled Style (Red Background)
-                is_cancelled = False
+                # Check for Status via Background Colors
+                is_canceled = False
+                is_flown_color = False
                 header_style = item.find("div", class_="ItemHeader").get("style", "")
-                if header_style and ("#FA0000" in header_style or "rgb(250, 0, 0)" in header_style):
-                    is_cancelled = True
+                if header_style:
+                    if "#FA0000" in header_style or "rgb(250, 0, 0)" in header_style:
+                        is_canceled = True
+                    elif "#4D2B09" in header_style or "rgb(77, 43, 9)" in header_style:
+                        is_flown_color = True
                 
                 # Parse Times
                 parsed_std = self._parse_time(date_obj, std_str)
@@ -266,14 +270,10 @@ class NOCScraper:
 
                 # Compute Status
                 status_str = "Scheduled"
-                if is_cancelled:
-                    status_str = "Cancelled"
-                elif parsed_atd:
-                    # If it has departed
-                    if parsed_std and parsed_atd > parsed_std + timedelta(minutes=15): # 15 min buffer for 'Delay'?
-                         status_str = "Delayed"
-                    else:
-                         status_str = "Flown"
+                if is_canceled:
+                    status_str = "Canceled"
+                elif is_flown_color:
+                    status_str = "Flown"
                 
                 # --- DB Interaction ---
                 # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
