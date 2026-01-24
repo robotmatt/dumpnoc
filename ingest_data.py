@@ -386,6 +386,7 @@ def save_pairing(session, pairing_id, month_year, start_dates, legs, total_credi
 
 
 def upload_ioe_to_cloud(session):
+    print("Cloud Sync: Uploading IOE Assignments...")
     from firestore_lib import upload_ioe_assignment
     ioe_data = session.query(IOEAssignment).all()
     count = 0
@@ -399,9 +400,11 @@ def upload_ioe_to_cloud(session):
         }
         upload_ioe_assignment(data, doc_id)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} IOE records.")
     return count
 
 def upload_pairings_to_cloud(session):
+    print("Cloud Sync: Uploading Scheduled Pairings...")
     from firestore_lib import upload_pairing_bundle
     sched_data = session.query(ScheduledFlight).all()
     
@@ -434,9 +437,11 @@ def upload_pairings_to_cloud(session):
     for doc_id, data in bundles.items():
         upload_pairing_bundle(doc_id, data)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} pairing bundles.")
     return count
 
 def upload_flights_to_cloud(session, start_date=None, end_date=None):
+    print("Cloud Sync: Uploading Historical Flights...")
     from firestore_lib import upload_daily_flights
     from database import Flight
     query = session.query(Flight)
@@ -511,9 +516,11 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
     for date_str, flights_map in daily_bundles.items():
         upload_daily_flights(date_str, flights_map)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} daily flight bundles.")
     return count
 
 def upload_metadata_to_cloud(session):
+    print("Cloud Sync: Uploading Application Metadata...")
     from firestore_lib import upload_metadata
     from database import AppMetadata
     meta = session.query(AppMetadata).all()
@@ -521,6 +528,7 @@ def upload_metadata_to_cloud(session):
     for m in meta:
         upload_metadata(m.key, m.value)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} metadata entries.")
     return count
 
 def sync_down_from_cloud(session):

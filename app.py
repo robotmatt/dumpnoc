@@ -477,6 +477,7 @@ elif selected_tab == NAV_SYNC:
                 pass
 
         if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch', disabled=not can_proceed):
+            print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] User initiated Full Sync Mirroring...")
             with st.status("🚀 Initializing Full Sync Mirror...", expanded=True) as status:
                 start_time = datetime.now()
                 session = get_db_session()
