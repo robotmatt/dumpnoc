@@ -79,7 +79,7 @@ def render_ioe_tab():
             leg_date = leg.date
             
             # Link Generation for Flight
-            flight_link = f"<a href='/?tab=historical&date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
+            flight_link = f"<a href='/historical?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
             
             candidates = [leg.flight_number, f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(
@@ -165,7 +165,7 @@ def render_ioe_tab():
             details_html.append("⚠️ No schedule data found for this pairing")
 
         # Pairing Link
-        p_link = f"<a href='/?tab=pairings&pairing={assign.pairing_number}' target='_self' style='text-decoration:none; color:#E694FF;'>{assign.pairing_number}</a>"
+        p_link = f"<a href='/pairings?pairing={assign.pairing_number}' target='_self' style='text-decoration:none; color:#E694FF;'>{assign.pairing_number}</a>"
         
         audit_results.append({
             "Check Airman": assign.employee_id,

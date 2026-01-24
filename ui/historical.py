@@ -219,7 +219,7 @@ def render_historical_tab():
             
             # Create the link HTML
             display_df['Flight #'] = display_df.apply(
-                lambda r: f"<a href='/?tab=historical&date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
+                lambda r: f"<a href='/historical?date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
                 axis=1
             )
             

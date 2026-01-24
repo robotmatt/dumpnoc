@@ -6,7 +6,10 @@ from scraper import NOCScraper
 from config import NOC_USERNAME, NOC_PASSWORD
 from firestore_lib import is_cloud_sync_enabled
 
-def render_sync_tab(username, password):
+def render_sync_tab():
+    username = st.session_state.get("username")
+    password = st.session_state.get("password")
+    
     st.header("Sync Settings")
     
     # Cloud Configuration Check (using dynamic setting)
