@@ -11,6 +11,8 @@ def background_worker():
     Background process that runs forever and scrapes data periodically.
     """
     print("[Background Scheduler] Worker started.")
+
+    should_scrape = False
     
     while True:
         try:
@@ -59,11 +61,14 @@ def background_worker():
                             set_metadata(session, "next_scheduled_scrape", next_val.strftime('%Y-%m-%d %H:%M:%S'))
                             
                             print(f"[Background Scheduler] Scrape complete. Next run at: {next_val.strftime('%H:%M:%S')}")
+                            should_scrape = False
                         else:
                             print("[Background Scheduler] Login failed.")
+                            should_scrape = False
                     except Exception as e:
                         print(f"[Background Scheduler] Error during scrape: {e}")
                     finally:
+                        should_scrape = False
                         scraper.stop()
                 else:
                     print("[Background Scheduler] Missing credentials in config.py, skipping background scrape.")
