@@ -235,6 +235,17 @@ class NOCScraper:
                             parsed_sta = date_obj.replace(hour=h, minute=m)
                     except: pass
 
+                # --- Extract Details Early for Matching ---
+                tail_number = details.get("Registration", ["", None])[0]
+                dep_apt = details.get("Departure", ["", None])[0]
+                arr_apt = details.get("Arrival", ["", None])[0]
+                pax_val = details.get("Pax", ["", None])[0]
+                load_val = details.get("Load", ["", None])[0]
+                notes_val = details.get("Notes", ["", None])[0]
+                type_val = details.get("Type", ["", None])[0]
+                ver_val = details.get("Version", ["", None])[0]
+                if not isinstance(notes_val, str): notes_val = ""
+
                 # --- DB Interaction ---
                 # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
                 # This prevents red-eye flights from being duplicated across midnight
@@ -243,19 +254,23 @@ class NOCScraper:
                     # Use midnight of the departure date as the canonical flight date
                     flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
                 
-                existing = self.session.query(Flight).filter_by(flight_number=flight_number, date=flight_date).first()
+                # Modified Query: Match on Flight # AND Date AND Route (Dep/Arr)
+                # This handles duplicate flight numbers (same day, different legs)
+                query = self.session.query(Flight).filter(
+                    Flight.flight_number == flight_number,
+                    Flight.date == flight_date
+                )
+                
+                if dep_apt and arr_apt:
+                    query = query.filter(
+                        Flight.departure_airport == dep_apt,
+                        Flight.arrival_airport == arr_apt
+                    )
+                
+                existing = query.first()
                 
                 if mode == "Local":
                     # Full Parse & Create
-                    tail_number = details.get("Registration", ["", None])[0]
-                    dep_apt = details.get("Departure", ["", None])[0]
-                    arr_apt = details.get("Arrival", ["", None])[0]
-                    pax_val = details.get("Pax", ["", None])[0]
-                    load_val = details.get("Load", ["", None])[0]
-                    notes_val = details.get("Notes", ["", None])[0]
-                    type_val = details.get("Type", ["", None])[0]
-                    ver_val = details.get("Version", ["", None])[0]
-                    if not isinstance(notes_val, str): notes_val = ""
                     
                     if not existing:
                         flight = Flight(

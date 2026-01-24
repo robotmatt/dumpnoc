@@ -205,15 +205,17 @@ if selected_tab == NAV_HISTORICAL:
                     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
                     m_col1.metric("Tail", detailed_flight.tail_number or "N/A")
                     m_col2.metric("Type/Ver", f"{detailed_flight.aircraft_type or '--'} / {detailed_flight.version or '--'}")
-                    m_col3.metric("Route", f"{detailed_flight.departure_airport} ➝ {detailed_flight.arrival_airport}")
+                    m_col3.metric("Departure Airport", detailed_flight.departure_airport or "N/A")
+                    m_col4.metric("Arrival Airport", detailed_flight.arrival_airport or "N/A")
                     
                     def fmt_pair(local_dt, utc_dt):
                         l = local_dt.strftime('%H:%M') if local_dt else "--"
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
                         return f"{l} (L) | {u} (Z)"
 
-                    m_col4.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
-                    st.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
+                    m_col_t1, m_col_t2 = st.columns(2)
+                    m_col_t1.metric("Departure (STD)", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
+                    m_col_t2.metric("Arrival (STA)", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
 
                     st.markdown("### 👨‍✈️ Crew")
                     from database import flight_crew_association
