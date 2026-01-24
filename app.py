@@ -23,7 +23,7 @@ from ui.ioe import render_ioe_tab
 from ui.sync import render_sync_tab
 from ui.settings import render_settings_tab
 
-page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", url_path="historical", default=True)
+page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
@@ -120,6 +120,15 @@ if "date" in query_params:
 
 if "flight_num" in query_params:
     st.session_state["history_flight_default"] = query_params["flight_num"]
+
+if "month" in query_params:
+    st.session_state["pairing_month_default"] = query_params["month"]
+
+if "pdate" in query_params:
+    try:
+        st.session_state["pairing_date_default"] = datetime.strptime(query_params["pdate"], "%Y-%m-%d").date()
+    except:
+        pass
 
 # Run the page logic
 pg.run()

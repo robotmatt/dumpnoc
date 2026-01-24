@@ -41,14 +41,24 @@ def render_pairings_tab():
             
         months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
         default_idx = months.index(current_month_str) if current_month_str in months else 0
+        
+        # Use deep link default if present
+        m_arg = st.session_state.get("pairing_month_default")
+        if m_arg in months:
+            default_idx = months.index(m_arg)
+            
         sel_month_str = st.selectbox("Filter by Bid Period", months, index=default_idx, key="month_search")
 
     with col3:
-        sel_date = st.date_input("Filter by Date", value=None, key="date_search")
+        d_arg = st.session_state.get("pairing_date_default")
+        sel_date = st.date_input("Filter by Date", value=d_arg, key="date_search")
     
     with col4:
         st.write("") # Spacer
         if st.button("🔄 Reset"):
+            # Clear search defaults
+            for k in ["pairing_search_default", "pairing_month_default", "pairing_date_default"]:
+                if k in st.session_state: del st.session_state[k]
             st.rerun()
 
     # Build Query
@@ -92,11 +102,17 @@ def render_pairings_tab():
             crews = [c.name for c in actual.crew_members]
             crew_str = "; ".join(crews)
         
+        # Determine month string for pairing link
+        p_month_str = ""
+        if sf.pairing_start_date:
+            bp_y, bp_m = get_bid_period_from_date(sf.pairing_start_date)
+            p_month_str = datetime(bp_y, bp_m, 1).strftime("%B %Y")
+
         data.append({
             "Trip Start": sf.pairing_start_date.strftime("%Y-%m-%d") if sf.pairing_start_date else "N/A",
             "Leg Date": sf.date.strftime("%Y-%m-%d"),
-            "Pairing": sf.pairing_number,
-            "Flight": sf.flight_number,
+            "Pairing": f"<a href='/pairings?pairing={sf.pairing_number}&month={p_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{sf.pairing_number}</a>",
+            "Flight": f"<a href='/?date={sf.date.strftime('%Y-%m-%d')}&flight_num={sf.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{sf.flight_number}</a>",
             "Route": f"{sf.departure_airport}-{sf.arrival_airport}",
             "Sch Dep": sf.scheduled_departure,
             "Sch Arr": sf.scheduled_arrival or "N/A",
@@ -108,7 +124,7 @@ def render_pairings_tab():
     
     if data:
         pairings_df = pd.DataFrame(data)
-        html_pairings = pairings_df.to_html(index=False, classes='dataframe')
+        html_pairings = pairings_df.to_html(index=False, classes='dataframe', escape=False)
         st.markdown(f"""
         <div style="max-height: 800px; overflow-y: auto; border: 1px solid #444; border-radius: 5px;">
             {html_pairings}
