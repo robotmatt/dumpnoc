@@ -59,6 +59,10 @@ def render_settings_tab():
     initial_days = int(current_days_db) if current_days_db else SCRAPE_DAYS
     new_days = st.number_input("Days to Scrape", min_value=1, max_value=14, value=initial_days)
 
+    next_scrape = get_metadata(session, "next_scheduled_scrape")
+    if next_scrape:
+        st.info(f"⏳ **Next Automatic Scrape:** {next_scrape}")
+    
     if new_interval != initial_interval:
         session = get_session()
         set_metadata(session, "scrape_interval_hours", str(new_interval))

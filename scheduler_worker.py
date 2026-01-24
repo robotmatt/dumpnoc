@@ -24,37 +24,41 @@ def background_worker():
             interval = int(interval_str) if interval_str else SCRAPE_INTERVAL_HOURS
             num_days = int(days_str) if days_str else SCRAPE_DAYS
             
-            should_scrape = False
-            
             if not last_sync_str:
                 should_scrape = True
+                next_scrape_dt = datetime.now()
             else:
                 last_sync_dt = datetime.strptime(last_sync_str, '%Y-%m-%d %H:%M:%S')
-                if datetime.now() >= last_sync_dt + timedelta(hours=interval):
+                next_scrape_dt = last_sync_dt + timedelta(hours=interval)
+                if datetime.now() >= next_scrape_dt:
                     should_scrape = True
             
+            # Persist next scrape time for UI
+            set_metadata(session, "next_scheduled_scrape", next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S'))
+
             if should_scrape:
                 print(f"[Background Scheduler] Starting scrape: Interval={interval}h, Days={num_days}")
-                
-                # We need credentials. If they aren't in config, we can't scrape automatically.
-                # In this app, they are usually in config or provided by user in UI.
-                # Background worker should only use what's stable.
+                print(f"[Background Scheduler] Next run calculated for: {next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 if NOC_USERNAME and NOC_PASSWORD:
                     scraper = NOCScraper(headless=True)
                     try:
                         scraper.start()
                         if scraper.login(NOC_USERNAME, NOC_PASSWORD):
-                            # Scrape today + num_days past
                             today = datetime.now()
                             for i in range(num_days):
                                 target_date = today - timedelta(days=i)
                                 print(f"[Background Scheduler] Scraping {target_date.strftime('%Y-%m-%d')}...")
                                 scraper.scrape_date(target_date)
                             
-                            # Update last sync time
-                            set_metadata(session, "last_successful_sync", datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-                            print("[Background Scheduler] Scrape complete.")
+                            now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            set_metadata(session, "last_successful_sync", now_str)
+                            
+                            # Recalculate next scrape for log
+                            next_val = datetime.now() + timedelta(hours=interval)
+                            set_metadata(session, "next_scheduled_scrape", next_val.strftime('%Y-%m-%d %H:%M:%S'))
+                            
+                            print(f"[Background Scheduler] Scrape complete. Next run at: {next_val.strftime('%H:%M:%S')}")
                         else:
                             print("[Background Scheduler] Login failed.")
                     except Exception as e:
@@ -63,6 +67,10 @@ def background_worker():
                         scraper.stop()
                 else:
                     print("[Background Scheduler] Missing credentials in config.py, skipping background scrape.")
+            else:
+                # Console debug info
+                time_to_wait = next_scrape_dt - datetime.now()
+                print(f"[Background Scheduler] Idle. Next scrape in {time_to_wait.total_seconds()/60:.1f} minutes ({next_scrape_dt.strftime('%H:%M:%S')})")
             
             session.close()
             
