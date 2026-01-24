@@ -283,13 +283,13 @@ if selected_tab == NAV_HISTORICAL:
                                         with h_col1:
                                             st.caption("Former Crew")
                                             if c_old:
-                                                st.dataframe(pd.DataFrame(c_old), use_container_width=True, hide_index=True)
+                                                st.dataframe(pd.DataFrame(c_old), width='stretch', hide_index=True)
                                             else:
                                                 st.write("None / Initial Scrape")
                                         with h_col2:
                                             st.caption("New Crew")
                                             if c_new:
-                                                st.dataframe(pd.DataFrame(c_new), use_container_width=True, hide_index=True)
+                                                st.dataframe(pd.DataFrame(c_new), width='stretch', hide_index=True)
                                             else:
                                                 st.write("Crew Removed")
                                     
@@ -477,25 +477,33 @@ elif selected_tab == NAV_SYNC:
                 pass
 
         if st.button("☁️ Full Sync: Mirror ALL Local Data to Cloud", type="secondary", width='stretch', disabled=not can_proceed):
-            with st.status("Performing Full Sync...", expanded=True) as status:
+            with st.status("🚀 Initializing Full Sync Mirror...", expanded=True) as status:
+                start_time = datetime.now()
                 session = get_db_session()
                 from ingest_data import upload_ioe_to_cloud, upload_pairings_to_cloud, upload_flights_to_cloud, upload_metadata_to_cloud
                 
-                status.write("Uploading IOE assignments...")
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering IOE assignments...")
                 cnt_ioe = upload_ioe_to_cloud(session)
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_ioe} IOE records.")
                 
-                status.write("Uploading scheduled pairings...")
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering scheduled pairings...")
                 cnt_pair = upload_pairings_to_cloud(session)
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_pair} pairing bundles.")
                 
-                status.write("Uploading historical flight data...")
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering historical flight data (this may take a moment)...")
                 cnt_flt = upload_flights_to_cloud(session) # No date range = all
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_flt} daily flight blocks.")
                 
-                status.write("Uploading application metadata...")
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Syncing application metadata...")
                 cnt_meta = upload_metadata_to_cloud(session)
+                status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Metadata sync complete.")
                 
                 session.close()
-                status.update(label="✅ Full Sync Complete!", state="complete", expanded=False)
-                st.success(f"Successfully mirrored: {cnt_ioe} IOE, {cnt_pair} Pairings, {cnt_flt} Flights, {cnt_meta} Metadata.")
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                
+                status.update(label=f"✅ Full Sync Complete in {duration:.1f}s!", state="complete", expanded=False)
+                st.success(f"**Mirroring Summary:**\n- {cnt_ioe} IOE Assignments\n- {cnt_pair} Pairings\n- {cnt_flt} Daily Flight Bundles\n- {cnt_meta} Metadata Keys\n\nTotal Duration: {duration:.1f} seconds")
 
         st.divider()
         st.caption("Manual Individual Syncs:")
@@ -539,12 +547,15 @@ elif selected_tab == NAV_SYNC:
     
     if active_cloud_sync:
         if st.button("⬇️ Restore from Cloud", type="secondary"):
-             with st.spinner("Restoring data from Cloud..."):
+             with st.status("📥 Restoring data from Cloud...", expanded=True) as status:
                  from ingest_data import sync_down_from_cloud
                  session = get_db_session()
+                 status.write("Downloading and merging data (this may take a minute)...")
                  stats = sync_down_from_cloud(session)
                  session.close()
-                 st.success(f"Restore Complete! Stats: {stats}")
+                 
+                 status.update(label="✅ Restore Complete!", state="complete", expanded=False)
+                 st.success(f"**Restore Summary:**\n- {stats.get('flights', 0)} Flights restored/updated\n- {stats.get('pairings', 0)} Pairings restored\n- {stats.get('ioe', 0)} IOE Assignments restored\n- {stats.get('metadata', 0)} Metadata keys updated")
                  st.balloons()
     else:
         st.info("Cloud sync is disabled. Enable it in the sidebar to use this feature.")

@@ -503,7 +503,9 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
              })
         flight_data["history"] = history_list
         
-        daily_bundles[date_str][f.flight_number] = flight_data
+        # Unique key within the daily bundle doc
+        unique_key = f"{f.flight_number}_{f.departure_airport or 'UNK'}_{f.arrival_airport or 'UNK'}"
+        daily_bundles[date_str][unique_key] = flight_data
         
     count = 0
     for date_str, flights_map in daily_bundles.items():
@@ -609,10 +611,19 @@ def sync_down_from_cloud(session):
     for doc_id, bundle in download_daily_flights():
         try:
             flights_map = bundle.get("flights", {})
-            for f_num, f_data in flights_map.items():
+            for unique_key, f_data in flights_map.items():
+                f_num = f_data.get("flight_number")
                 f_date = f_data.get("date")
+                f_dep_apt = f_data.get("departure_airport")
+                f_arr_apt = f_data.get("arrival_airport")
                 
-                existing_f = session.query(Flight).filter_by(flight_number=f_num, date=f_date).first()
+                # Match by Number + Date + Departure + Arrival (for duplicates)
+                existing_f = session.query(Flight).filter_by(
+                    flight_number=f_num, 
+                    date=f_date,
+                    departure_airport=f_dep_apt,
+                    arrival_airport=f_arr_apt
+                ).first()
                 crew_list = f_data.get("crew", [])
                 
                 if existing_f:
