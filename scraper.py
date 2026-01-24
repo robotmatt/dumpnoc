@@ -242,10 +242,10 @@ class NOCScraper:
                                 t_str, d_str = parts
                                 dt_obj = datetime.strptime(d_str, "%d%b%y")
                                 h = int(t_str[:2]); m = int(t_str[2:])
-                                return dt_obj.replace(hour=h, minute=m)
+                                return dt_obj.replace(hour=h, minute=m, second=0, microsecond=0)
                         elif len(val_clean) == 4 and val_clean.isdigit():
                             h = int(val_clean[:2]); m = int(val_clean[2:])
-                            return base_date.replace(hour=h, minute=m)
+                            return base_date.replace(hour=h, minute=m, second=0, microsecond=0)
                     except: 
                         return None
                     return None
@@ -522,6 +522,6 @@ class NOCScraper:
         try:
             h = int(time_str[:2])
             m = int(time_str[2:])
-            return date_obj.replace(hour=h, minute=m)
+            return date_obj.replace(hour=h, minute=m, second=0, microsecond=0)
         except:
             return None

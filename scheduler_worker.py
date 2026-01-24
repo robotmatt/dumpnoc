@@ -47,7 +47,7 @@ def background_worker():
                     try:
                         scraper.start()
                         if scraper.login(NOC_USERNAME, NOC_PASSWORD):
-                            today = datetime.now()
+                            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                             for i in range(num_days):
                                 target_date = today + timedelta(days=i)
                                 print(f"[Background Scheduler] Scraping {target_date.strftime('%Y-%m-%d')}...")
