@@ -193,6 +193,16 @@ def render_historical_tab():
             st.divider()
             st.subheader("Daily Flight Schedule")
             
+            # --- Metrics ---
+            m1, m2, m3 = st.columns(3)
+            num_scheduled = len(df_flights)
+            num_flown = df_flights['status'].str.upper().str.contains('FLOWN', na=False).sum()
+            num_canceled = df_flights['status'].str.upper().str.contains('CANCELED', na=False).sum()
+            
+            m1.metric("Flights Scheduled", num_scheduled)
+            m2.metric("Flights Flown", num_flown)
+            m3.metric("Flights Canceled", num_canceled)
+            
             # Sorting for Schedule
             col_sort1, col_sort2 = st.columns([2, 1])
             with col_sort1:
@@ -207,7 +217,7 @@ def render_historical_tab():
                 "Tail": "tail_number"
             }
             
-            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number']].copy()
+            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
             display_df['flight_num_clean'] = display_df['flight_number'].apply(clean_fn).astype(int, errors='ignore')
             
             # Sort the data
@@ -224,11 +234,12 @@ def render_historical_tab():
             )
             
             # Rename for final presentation
-            render_df = display_df[['Flight #', 'formatted_departure', 'departure_airport', 'arrival_airport', 'tail_number']].rename(columns={
+            render_df = display_df[['Flight #', 'formatted_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].rename(columns={
                 'formatted_departure': 'Departure',
                 'departure_airport': 'Dep',
                 'arrival_airport': 'Arr',
-                'tail_number': 'Tail'
+                'tail_number': 'Tail', 
+                'status': 'Status'
             })
             
             html_table = render_df.to_html(escape=False, index=False, classes='dataframe')
