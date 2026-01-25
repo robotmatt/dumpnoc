@@ -50,6 +50,7 @@ def render_ioe_tab():
     total_ioe_verified_global = 0
     total_future_legs_global = 0
     total_flown_not_ioe_global = 0
+    total_canceled_global = 0
     
     now = datetime.now()
     
@@ -142,19 +143,27 @@ def render_ioe_tab():
             if not actual and leg_date.date() == now.date():
                  leg_status = "In Progress (Not Scraped)"
             elif actual:
-                 student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
-                 
-                 if student_present:
-                     legs_flown_by_student += 1
-                     leg_status = "Flown"
-                     if has_ioe_any:
-                         legs_marked_ioe += 1
-                         leg_status += f" (IOE: {', '.join(ioe_crew_names)})"
-                     else:
-                         total_flown_not_ioe_global += 1
-                         leg_status += f" (No IOE flags, Crew: {'; '.join(crew_details)})"
+                 is_canceled = "CANCELED" in (actual.status or "").upper()
+                 if is_canceled:
+                     leg_status = "Canceled"
                  else:
-                     leg_status = "Student Missing"
+                     student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
+                     
+                     if student_present:
+                         legs_flown_by_student += 1
+                         leg_status = "Flown"
+                         if has_ioe_any:
+                             legs_marked_ioe += 1
+                             leg_status += f" (IOE: {', '.join(ioe_crew_names)})"
+                         else:
+                             total_flown_not_ioe_global += 1
+                             leg_status += f" (No IOE flags, Crew: {'; '.join(crew_details)})"
+                     else:
+                         leg_status = f"not used for IOE (Crew: {'; '.join(crew_details)})"
+            
+            if leg_status == "Canceled":
+                total_legs -= 1
+                total_canceled_global += 1
             
             details_html.append(f"{flight_link}: {leg_status}")
 
@@ -179,18 +188,27 @@ def render_ioe_tab():
     session.close()
     
     # -- Metrics Display --
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Assignments", len(assignments))
     m2.metric("Total Flight Legs", total_legs_global)
     
     rate = 0.0
     future_rate = 0.0
+    cancel_rate = 0.0
+    
+    # Total denominator including canceled for the cancel rate
+    total_scheduled = total_legs_global + total_canceled_global
+    
     if total_legs_global > 0:
         rate = (total_ioe_verified_global / total_legs_global) * 100
         future_rate = (total_future_legs_global / total_legs_global) * 100
+    
+    if total_scheduled > 0:
+        cancel_rate = (total_canceled_global / total_scheduled) * 100
            
     m3.metric("IOE Verified Rate", f"{rate:.1f}%")
-    m4.metric("Future Trip Rate", f"{future_rate:.1f}%")
+    m4.metric("Canceled %", f"{cancel_rate:.1f}%")
+    m5.metric("Future Trip Rate", f"{future_rate:.1f}%")
     
     # HTML Table Rendering with Sorting
     if audit_results:
