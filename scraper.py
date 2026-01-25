@@ -218,14 +218,18 @@ class NOCScraper:
                 atd_str = details.get("ATD", ["", None])[0]
                 ata_val = details.get("ATA", ["", None])[0]
                 
-                # Check for Status via Background Colors
+                # Check for Status via Background Colors (Case Insensitive)
                 is_canceled = False
                 is_flown_color = False
-                header_style = item.find("div", class_="ItemHeader").get("style", "")
+                header_div = item.find("div", class_="ItemHeader")
+                header_style = header_div.get("style", "").upper() if header_div else ""
+                
                 if header_style:
-                    if "#FA0000" in header_style or "rgb(250, 0, 0)" in header_style:
+                    # Canceled: Red (#FA0000, rgb(250, 0, 0))
+                    if "#FA0000" in header_style or "RGB(250, 0, 0)" in header_style or "RGB(250,0,0)" in header_style:
                         is_canceled = True
-                    elif "#4D2B09" in header_style or "rgb(77, 43, 9)" in header_style:
+                    # Flown: Brown (#4D2B09, rgb(77, 43, 9))
+                    elif "#4D2B09" in header_style or "RGB(77, 43, 9)" in header_style or "RGB(77,43,9)" in header_style:
                         is_flown_color = True
                 
                 # Parse Times
@@ -346,7 +350,8 @@ class NOCScraper:
                         "Departure Airport": ("departure_airport", dep_apt),
                         "Arrival Airport": ("arrival_airport", arr_apt),
                         "Aircraft Type": ("aircraft_type", type_val),
-                        "Version": ("version", ver_val)
+                        "Version": ("version", ver_val),
+                        "Status": ("status", status_str)
                     }
                     
                     for label, (attr, new_val) in fields_to_check.items():
@@ -428,55 +433,33 @@ class NOCScraper:
                             changes["Crew"] = {"old": current_crew_list, "new": new_crew_list}
                     
                     # --- Save History if Differences Found ---
-                    if changes:
+                    history_changes = {k: v for k, v in changes.items() if k != "Status"}
+                    if history_changes:
                         # Filter out initial creation if desired?
-                        # User wants history. Initial creation is technically a change from None to Data.
-                        # But typically history implies "Correction" or "Update".
-                        # However, if we just created `flight` above (`if not existing`), `changes` might be full of None->Value.
-                        # It might be noisy to log history for every new flight.
-                        # Let's Skip logging if we just created the row.
                         
-                        was_just_created = (flight_date == existing.date and existing.id and not current_crew_list and not existing.tail_number) # heuristic?
-                        # Actually we have a variable `flight` created above inside `if not existing`.
-                        # But we overwrote `existing = flight`.
+                        was_just_created = (flight_date == existing.date and existing.id and not current_crew_list and not existing.tail_number) 
                         
-                        # Let's rely on checking if it was in DB before.
-                        # If existing was loaded from query, we log.
-                        # But wait, I modified existing's attributes in step 1 loop.
-                        # I need to know if it was freshly created.
-                        
-                        # Re-logic:
-                        # Existing is query result.
-                        # If query result was None, we created a new object.
-                        # We should verify this before starting changes check.
-                        pass # See below for implementation
-                    
-                        # Wait, the tool only lets me replace content. I can't look back up.
-                        # I'll assumme if `pax_data` etc are updated, that's fine.
-                        # But creating History for brand new flights?
-                        # Probably not what user wants ("history of specific flights... mainly if the crew has changed").
-                        # Suggest filtering out if ALL old values are None?
-                        
-                        # Let's insert the history record
-                        try:
-                            summary_parts = []
-                            for k, v in changes.items():
-                                summary_parts.append(k)
-                            
-                            summary = f"Changed: {', '.join(summary_parts)}"
-                            
-                            from database import FlightHistory
-                            # Check if redundant? No, we trust the diff.
-                            hist = FlightHistory(
-                                flight_id=existing.id,
-                                timestamp=datetime.now(),
-                                changes_json=json.dumps(changes),
-                                description=summary
-                            )
-                            self.session.add(hist)
-                            print(f"  [History] {summary} for {flight_number}")
-                        except Exception as e:
-                            print(f"Error logging history: {e}")
+                        if not was_just_created:
+                            # Let's insert the history record
+                            try:
+                                summary_parts = []
+                                for k, v in history_changes.items():
+                                    summary_parts.append(k)
+                                
+                                summary = f"Changed: {', '.join(summary_parts)}"
+                                
+                                from database import FlightHistory
+                                # Check if redundant? No, we trust the diff.
+                                hist = FlightHistory(
+                                    flight_id=existing.id,
+                                    timestamp=datetime.now(),
+                                    changes_json=json.dumps(history_changes),
+                                    description=summary
+                                )
+                                self.session.add(hist)
+                                print(f"  [History] {summary} for {flight_number}")
+                            except Exception as e:
+                                print(f"Error logging history: {e}")
 
                     # --- Sync Crew to DB ---
                     # Always overwrite the association with the latest scrape (new_crew_list)
