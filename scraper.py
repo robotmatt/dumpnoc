@@ -346,8 +346,7 @@ class NOCScraper:
                         "Departure Airport": ("departure_airport", dep_apt),
                         "Arrival Airport": ("arrival_airport", arr_apt),
                         "Aircraft Type": ("aircraft_type", type_val),
-                        "Version": ("version", ver_val),
-                        "Status": ("status", status_str)
+                        "Version": ("version", ver_val)
                     }
                     
                     for label, (attr, new_val) in fields_to_check.items():
