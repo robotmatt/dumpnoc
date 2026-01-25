@@ -98,7 +98,7 @@ def render_pairings_tab():
         crew_str = "N/A"
         status = "Scheduled"
         if actual:
-            status = "Flown"
+            status = actual.status or "Flown"
             crews = [c.name for c in actual.crew_members]
             crew_str = "; ".join(crews)
         

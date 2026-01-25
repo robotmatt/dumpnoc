@@ -217,7 +217,33 @@ def render_historical_tab():
                 "Tail": "tail_number"
             }
             
+            # Fetch CA and FO for each flight
+            ca_list = []
+            fo_list = []
+            
+            from database import flight_crew_association
+            session = get_session()
+            for idx, row in df_flights.iterrows():
+                f_id = row['id']
+                stmt = flight_crew_association.select().where(flight_crew_association.c.flight_id == f_id)
+                assoc_rows = session.execute(stmt).fetchall()
+                
+                ca = "N/A"
+                fo = "N/A"
+                for r in assoc_rows:
+                    cm = session.get(CrewMember, r.crew_id)
+                    role = (r.role or "").upper()
+                    if "CAPTAIN" in role or "CA" == role:
+                        ca = cm.name
+                    elif "FIRST OFFICER" in role or "FO" in role:
+                        fo = cm.name
+                ca_list.append(ca)
+                fo_list.append(fo)
+            session.close()
+            
             display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
+            display_df['CA'] = ca_list
+            display_df['FO'] = fo_list
             display_df['flight_num_clean'] = display_df['flight_number'].apply(clean_fn).astype(int, errors='ignore')
             
             # Sort the data
@@ -234,7 +260,7 @@ def render_historical_tab():
             )
             
             # Rename for final presentation
-            render_df = display_df[['Flight #', 'formatted_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].rename(columns={
+            render_df = display_df[['Flight #', 'formatted_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'CA', 'FO', 'status']].rename(columns={
                 'formatted_departure': 'Departure',
                 'departure_airport': 'Dep',
                 'arrival_airport': 'Arr',
