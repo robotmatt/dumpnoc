@@ -1,6 +1,15 @@
 # NOC Mobile Scraper & Archiver
 
-This application scrapes flight and crew data from NOC Mobile and archives it for offline processing.
+This application scrapes flight and crew data from NOC Mobile and archives it for offline processing, historical auditing, and cloud synchronization.
+
+## Features
+
+- **Automated Scraping**: Scrapes flight details, crew assignments, passenger data, and operational notes.
+- **Change History Tracking**: Automatically detects and logs changes to flights (Crew swaps, tail number changes, schedule delays, etc.) with a timestamped audit trail.
+- **Scheduled Background Sync**: A dedicated scheduler script to pull data periodically on a configurable interval.
+- **IOE Audit Reporting**: Compares scraped flight logs against IOE assignments to verify training completion.
+- **Cloud Synchronization**: Optional two-way sync with Google Firestore for data persistence across multiple devices.
+- **Historical Data Explorer**: Search and view detailed flight logs for any date in the database.
 
 ## Setup
 
@@ -15,19 +24,34 @@ This application scrapes flight and crew data from NOC Mobile and archives it fo
         ```
         NOC_USERNAME=your_username
         NOC_PASSWORD=your_password
+        # Optional:
+        DATABASE_URL=sqlite:///noc_data.db
+        ENABLE_CLOUD_SYNC=False
+        SCRAPE_INTERVAL_HOURS=1
         ```
 
-3.  **Run the App**:
+3.  **Run the Web Interface**:
     ```bash
     streamlit run app.py
     ```
 
-> **Note:** The `run_app.sh` script now prompts you to ingest pairing and IOE data on startup. If you answer `y`, all files in the `pairings/` and `ioe/` directories will be processed each time the app starts.
+## background Scheduler
+
+The application includes a background scheduler that runs independently of the web UI to keep your data fresh.
+
+1.  **Set the Interval**: In the web UI sidebar, find the **Scheduler Config** section and set your desired interval (e.g., 1 hour).
+2.  **Launch the Scheduler**:
+    ```bash
+    python run_scheduler.py
+    ```
+    This script will run continuously, logging in to NOC Mobile and performing a sweep of "Today" and "Tomorrow" at the specified interval. It handles session timeouts and browser restarts automatically.
 
 ## Usage
 
-*   **Scraper Tab**: Select a start and end date, then click "Start Scraping". The app will launch a browser, log in, and scrape data for each day in the range.
-*   **Data Explorer Tab**: View and search the scraped flights and crew data.
+*   **📅 Historical Data**: View daily flight logs. Click on a flight number to see detailed operational data and the **Flight Change History**.
+*   **📋 Pairings**: View scheduled pairings and compare scheduled vs. actual flown data.
+*   **🎓 IOE Audit**: Run reports to see which IOE assignments have been completed and which legs are missing student/check-airman data.
+*   **🔄 Sync Data**: Manually trigger pulls from NOC Mobile for specific date ranges or mirror/restore your local database with Google Firestore.
 
 ## Database
 
@@ -40,17 +64,10 @@ To migrate to **Google Cloud SQL (PostgreSQL)**:
 3. The application will automatically create the necessary tables on first run.
 
 ## Google Cloud Firestore Setup
-To enable cloud sync, follow the detailed instructions in [FIREBASE.md](file:///c:/Code/dumpnoc/FIREBASE.md).
+To enable cloud sync, follow the detailed instructions in [FIREBASE.md](FIREBASE.md).
 
 Quick Summary:
-1.  Create a project in the [Google Cloud Console](https://console.cloud.google.com/).
-2.  Enable the **Firestore API** and create a Firestore database (Native mode).
-3.  Go to **IAM & Admin > Service Accounts** and create a service account.
-4.  Grant the service account `Cloud Datastore User` role.
-5.  Create a key (JSON) for the service account and download it.
-6.  Place the JSON file in the project root (e.g. as `firestore_key.json`).
-7.  Update `.env` or set environment variables:
-    ```bash
-    FIRESTORE_CREDENTIALS="path/to/firestore_key.json"
-    ENABLE_CLOUD_SYNC=True
-    ```
+1.  Enable the **Firestore API** in Google Cloud Console.
+2.  Create a Service Account with the `Cloud Datastore User` role.
+3.  Download the JSON key and place it in the root directory.
+4.  Set `ENABLE_CLOUD_SYNC=True` in your `.env`.

@@ -44,7 +44,7 @@ def main():
     confirm1 = input("\nAre you SURE you want to delete all flight data? (yes/no): ")
     
     if confirm1.lower() != 'yes':
-        print("Cancelled - no changes made.")
+        print("Canceled - no changes made.")
         session.close()
         return
     
@@ -52,7 +52,7 @@ def main():
     confirm2 = input("Type 'DELETE ALL FLIGHTS' to confirm: ")
     
     if confirm2 != 'DELETE ALL FLIGHTS':
-        print("Cancelled - no changes made.")
+        print("Canceled - no changes made.")
         session.close()
         return
     

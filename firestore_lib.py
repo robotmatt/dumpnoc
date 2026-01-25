@@ -51,15 +51,25 @@ def get_db():
 def upload_daily_flights(date_str: str, flights_map: dict):
     """
     date_str: YYYY-MM-DD
-    flights_map: { flight_number: { ...details... } }
+    flights_map: { flight_id: { ...details... } }
+    
+    Restructured to use subcollections to avoid the 1MB per document limit in Firestore.
     """
     db = get_db()
     if not db: return
     try:
+        # Root document for the date
         doc_ref = db.collection('daily_flights').document(date_str)
-        # Use merge=True to update individual flights in the map without clearing others
-        doc_ref.set({"flights": flights_map}, merge=True)
-        print(f"Updated daily flights for {date_str}")
+        doc_ref.set({"last_updated": firestore.SERVER_TIMESTAMP}, merge=True)
+        
+        # Upload each flight to a subcollection
+        for f_id, f_data in flights_map.items():
+            # Sanitize document ID: Firestore IDs cannot contain '/'
+            safe_f_id = str(f_id).replace("/", "-")
+            f_doc_ref = doc_ref.collection('flights').document(safe_f_id)
+            f_doc_ref.set(f_data, merge=True)
+            
+        print(f"Updated daily flights for {date_str} (in sub-collection 'flights')")
     except Exception as e:
         print(f"Error updating daily flights for {date_str}: {e}")
 
@@ -144,7 +154,21 @@ def download_daily_flights():
     try:
         docs = db.collection('daily_flights').stream()
         for doc in docs:
-            yield doc.id, doc.to_dict()
+            # Check for data in subcollection first (New Format)
+            flights_map = {}
+            f_docs = doc.reference.collection('flights').stream()
+            for fd in f_docs:
+                flights_map[fd.id] = fd.to_dict()
+            
+            # Fallback to legacy field if subcollection is empty (Old Format)
+            if not flights_map:
+                legacy_data = doc.to_dict()
+                if legacy_data and "flights" in legacy_data:
+                    flights_map = legacy_data["flights"]
+            
+            if flights_map:
+                yield doc.id, {"flights": flights_map}
+                
     except Exception as e:
         print(f"Error downloading daily_flights: {e}")
 

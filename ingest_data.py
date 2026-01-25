@@ -386,6 +386,7 @@ def save_pairing(session, pairing_id, month_year, start_dates, legs, total_credi
 
 
 def upload_ioe_to_cloud(session):
+    print("Cloud Sync: Uploading IOE Assignments...")
     from firestore_lib import upload_ioe_assignment
     ioe_data = session.query(IOEAssignment).all()
     count = 0
@@ -399,9 +400,11 @@ def upload_ioe_to_cloud(session):
         }
         upload_ioe_assignment(data, doc_id)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} IOE records.")
     return count
 
 def upload_pairings_to_cloud(session):
+    print("Cloud Sync: Uploading Scheduled Pairings...")
     from firestore_lib import upload_pairing_bundle
     sched_data = session.query(ScheduledFlight).all()
     
@@ -434,9 +437,11 @@ def upload_pairings_to_cloud(session):
     for doc_id, data in bundles.items():
         upload_pairing_bundle(doc_id, data)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} pairing bundles.")
     return count
 
 def upload_flights_to_cloud(session, start_date=None, end_date=None):
+    print("Cloud Sync: Uploading Historical Flights...")
     from firestore_lib import upload_daily_flights
     from database import Flight
     query = session.query(Flight)
@@ -491,15 +496,31 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
             })
         flight_data["crew"] = crew_list
         
-        daily_bundles[date_str][f.flight_number] = flight_data
+        # Add Flight History
+        from database import FlightHistory
+        history_recs = session.query(FlightHistory).filter_by(flight_id=f.id).all()
+        history_list = []
+        for h in history_recs:
+             history_list.append({
+                 "timestamp": h.timestamp.strftime('%Y-%m-%d %H:%M:%S'),
+                 "changes_json": h.changes_json,
+                 "description": h.description
+             })
+        flight_data["history"] = history_list
+        
+        # Unique key within the daily bundle doc
+        unique_key = f"{f.flight_number}_{f.departure_airport or 'UNK'}_{f.arrival_airport or 'UNK'}"
+        daily_bundles[date_str][unique_key] = flight_data
         
     count = 0
     for date_str, flights_map in daily_bundles.items():
         upload_daily_flights(date_str, flights_map)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} daily flight bundles.")
     return count
 
 def upload_metadata_to_cloud(session):
+    print("Cloud Sync: Uploading Application Metadata...")
     from firestore_lib import upload_metadata
     from database import AppMetadata
     meta = session.query(AppMetadata).all()
@@ -507,6 +528,7 @@ def upload_metadata_to_cloud(session):
     for m in meta:
         upload_metadata(m.key, m.value)
         count += 1
+    print(f"Cloud Sync: Uploaded {count} metadata entries.")
     return count
 
 def sync_down_from_cloud(session):
@@ -597,10 +619,19 @@ def sync_down_from_cloud(session):
     for doc_id, bundle in download_daily_flights():
         try:
             flights_map = bundle.get("flights", {})
-            for f_num, f_data in flights_map.items():
+            for unique_key, f_data in flights_map.items():
+                f_num = f_data.get("flight_number")
                 f_date = f_data.get("date")
+                f_dep_apt = f_data.get("departure_airport")
+                f_arr_apt = f_data.get("arrival_airport")
                 
-                existing_f = session.query(Flight).filter_by(flight_number=f_num, date=f_date).first()
+                # Match by Number + Date + Departure + Arrival (for duplicates)
+                existing_f = session.query(Flight).filter_by(
+                    flight_number=f_num, 
+                    date=f_date,
+                    departure_airport=f_dep_apt,
+                    arrival_airport=f_arr_apt
+                ).first()
                 crew_list = f_data.get("crew", [])
                 
                 if existing_f:
@@ -659,6 +690,31 @@ def sync_down_from_cloud(session):
                             flags=c_dict.get("flags", "")
                         )
                         session.execute(ins)
+
+                    # Sync History
+                    history_list = f_data.get("history", [])
+                    if history_list and existing_f.id:
+                        from database import FlightHistory
+                        # Get existing timestamps to prevent duplicates
+                        existing_timestamps = set(
+                            [h.timestamp.strftime('%Y-%m-%d %H:%M:%S') for h in 
+                             session.query(FlightHistory).filter_by(flight_id=existing_f.id).all()]
+                        )
+                        
+                        for h_data in history_list:
+                            ts_str = h_data.get("timestamp")
+                            if ts_str not in existing_timestamps:
+                                try:
+                                    ts = datetime.datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
+                                    new_h = FlightHistory(
+                                        flight_id=existing_f.id,
+                                        timestamp=ts,
+                                        changes_json=h_data.get("changes_json"),
+                                        description=h_data.get("description")
+                                    )
+                                    session.add(new_h)
+                                except Exception as e:
+                                    print(f"Error restoring history record: {e}")
 
         except Exception as e:
             print(f"Error restoring flights for {doc_id}: {e}")
