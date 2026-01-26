@@ -286,12 +286,30 @@ def render_ioe_tab():
                         flight_num_clean = flight_num_clean[2:]
                     elif flight_num_clean.startswith('C'):
                         flight_num_clean = flight_num_clean[1:]
-                    scheduled = session.query(ScheduledFlight).filter(
+                    all_candidates = session.query(ScheduledFlight).filter(
                         ScheduledFlight.flight_number == flight_num_clean,
                         ScheduledFlight.date == flight.date
-                    ).first()
+                    ).all()
                     
-                    pairing_num = scheduled.pairing_number if scheduled else "Unknown"
+                    # If any candidate started in a previous bid period, consider it a carry-over and skip
+                    if any(s.pairing_start_date and s.pairing_start_date < month_start for s in all_candidates):
+                        continue
+                        
+                    # Resolve which pairing to attribute to
+                    scheduled = None
+                    if all_candidates:
+                        # Prefer assigned if possible
+                        for s in all_candidates:
+                            if s.pairing_number in assigned_pairings:
+                                scheduled = s
+                                break
+                        if not scheduled:
+                            scheduled = all_candidates[0]
+                    
+                    if not scheduled:
+                        pairing_num = "Unknown"
+                    else:
+                        pairing_num = scheduled.pairing_number
                     
                     # Check if this pairing is in the official IOE assignment list
                     if pairing_num not in assigned_pairings:
@@ -350,16 +368,31 @@ def render_ioe_tab():
                 flight_num_clean = flight_num_clean[2:]
             elif flight_num_clean.startswith('C'):
                 flight_num_clean = flight_num_clean[1:]
-            scheduled = session.query(ScheduledFlight).filter(
+            all_candidates = session.query(ScheduledFlight).filter(
                 ScheduledFlight.flight_number == flight_num_clean,
                 ScheduledFlight.date == flight.date
-            ).first()
+            ).all()
+            
+            # If any candidate started in a previous bid period, consider it a carry-over and skip
+            if any(s.pairing_start_date and s.pairing_start_date < month_start for s in all_candidates):
+                continue
+                
+            # Identify which pairing to attribute this to
+            scheduled = None
+            if all_candidates:
+                # Prefer assigned pairings
+                for s in all_candidates:
+                    if s.pairing_number in assigned_pairings:
+                        scheduled = s
+                        break
+                if not scheduled:
+                    scheduled = all_candidates[0]
             
             if not scheduled:
                 continue
             
             pairing_num = scheduled.pairing_number
-            
+                
             # Skip if this is an official IOE pairing
             if pairing_num in assigned_pairings:
                 continue
