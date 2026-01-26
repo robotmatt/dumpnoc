@@ -301,11 +301,13 @@ class NOCScraper:
                     )
                 
                 existing = query.first()
+                was_new_flight = False
                 
                 if mode == "Local":
                     # Full Parse & Create
                     
                     if not existing:
+                        was_new_flight = True
                         flight = Flight(
                             flight_number=flight_number,
                             date=flight_date,  # Use flight_date (from departure time), not scrape date
@@ -328,12 +330,6 @@ class NOCScraper:
                         self.session.add(flight)
                         self.session.flush()
                         
-                        existing = flight # Now existing is valid for the rest of the flow                     # We still need to parse crew for the first insert
-                        # (Code similar to below but without history check)
-                        # For simplicity, we can let the history-check block handle "Change from None to X" 
-                        # but "existing" is None effectively.
-                        # Actually, better to just let the update logic run below? 
-                        # If existing is None, we just created it. 
                         existing = flight # Now existing is valid for the rest of the flow
                     
                     
@@ -434,12 +430,7 @@ class NOCScraper:
                     
                     # --- Save History if Differences Found ---
                     history_changes = {k: v for k, v in changes.items() if k != "Status"}
-                    if history_changes:
-                        # Filter out initial creation if desired?
-                        
-                        was_just_created = (flight_date == existing.date and existing.id and not current_crew_list and not existing.tail_number) 
-                        
-                        if not was_just_created:
+                    if history_changes and not was_new_flight:
                             # Let's insert the history record
                             try:
                                 summary_parts = []
