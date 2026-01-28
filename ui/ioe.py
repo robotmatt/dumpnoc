@@ -149,16 +149,22 @@ def render_ioe_tab():
                  else:
                      student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
                      
-                     if student_present:
-                         legs_flown_by_student += 1
-                         leg_status = "Flown"
-                         if has_ioe_any:
-                             legs_marked_ioe += 1
-                             leg_status += f" (IOE: {', '.join(ioe_crew_names)})"
+                     # Prioritize IOE flags - if any pilot has IOE flag, count as IOE verified
+                     # This handles cases where a different student flew than originally assigned
+                     if has_ioe_any:
+                         legs_marked_ioe += 1
+                         if student_present:
+                             leg_status = f"Flown (IOE: {', '.join(ioe_crew_names)})"
                          else:
-                             total_flown_not_ioe_global += 1
-                             leg_status += f" (No IOE flags, Crew: {'; '.join(crew_details)})"
+                             # Different student than assigned, but still IOE
+                             leg_status = f"Flown with different IOE student (IOE: {', '.join(ioe_crew_names)})"
+                     elif student_present:
+                         # Assigned student flew but no IOE flags
+                         legs_flown_by_student += 1
+                         total_flown_not_ioe_global += 1
+                         leg_status = f"Flown (No IOE flags, Crew: {'; '.join(crew_details)})"
                      else:
+                         # Neither IOE flags nor assigned student
                          leg_status = f"not used for IOE (Crew: {'; '.join(crew_details)})"
             
             if leg_status == "Canceled":
