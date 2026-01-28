@@ -153,11 +153,7 @@ def render_ioe_tab():
                      # This handles cases where a different student flew than originally assigned
                      if has_ioe_any:
                          legs_marked_ioe += 1
-                         if student_present:
-                             leg_status = f"Flown (IOE: {', '.join(ioe_crew_names)})"
-                         else:
-                             # Different student than assigned, but still IOE
-                             leg_status = f"Flown with different IOE student (IOE: {', '.join(ioe_crew_names)})"
+                         leg_status = f"Flown (IOE: {', '.join(ioe_crew_names)})"
                      elif student_present:
                          # Assigned student flew but no IOE flags
                          legs_flown_by_student += 1
