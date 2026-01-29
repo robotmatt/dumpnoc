@@ -82,10 +82,11 @@ def render_ioe_tab():
             # Link Generation for Flight
             flight_link = f"<a href='/?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
             
-            candidates = [leg.flight_number, f"C5{leg.flight_number}", f"C{leg.flight_number}"]
+            candidates = [str(leg.flight_number), f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(
                 Flight.flight_number.in_(candidates), 
-                Flight.date == leg.date
+                Flight.date >= datetime.combine(leg_date.date(), datetime.min.time()),
+                Flight.date < datetime.combine(leg_date.date() + timedelta(days=1), datetime.min.time())
             ).first()
             
             crew_details = []
@@ -96,6 +97,7 @@ def render_ioe_tab():
             ioe_crew_names = []
 
             if actual:
+                caps = []
                 for cm in actual.crew_members:
                     assoc = session.execute(
                         flight_crew_association.select().where(
@@ -108,60 +110,68 @@ def render_ioe_tab():
                     if role and "FA" in role.upper():
                         continue
                         
+                    flags = (assoc.flags or "").upper()
                     name_role = f"{cm.name} ({role})"
-                    crew_details.append(name_role)
+                    crew_details.append(f"{name_role} [{flags}]")
                     
                     r_up = role.upper()
+                    
                     if "CAPTAIN" in r_up or "CA" == r_up:
-                         captain_name = cm.name
+                        caps.append(cm.name)
                     
                     if "FIRST OFFICER" in r_up or "FO" in r_up:
                          fo_found = True
                     
-                    if assoc and "IOE" in (assoc.flags or ""):
+                    if "IOE" in flags:
                         ioe_crew_names.append(name_role)
                         has_ioe_any = True
                         if "FIRST OFFICER" in r_up or "FO" in r_up:
                             has_ioe_fo = True
+                
+                if caps:
+                    captain_name = " & ".join(caps)
+            
+            # Status Determination
+            leg_status = "Not Scraped"
+            is_verified = False
+            
+            # Form debug string of all crew found
+            debug_crew_str = "; ".join(crew_details)
             
             if leg_date.date() > now.date():
+                leg_type = "Future Trip"
                 if actual:
-                    if has_ioe_fo:
-                        legs_marked_ioe += 1
-                        details_html.append(f"{flight_link}: Future Trip (IOE: {', '.join(ioe_crew_names)})")
+                    if has_ioe_any:
+                        is_verified = True
+                        leg_status = f"{leg_type} (Verified IOE: {', '.join(ioe_crew_names)})"
                     else:
                         fo_status = "No FO" if not fo_found else "FO Present (No IOE)"
-                        details_html.append(f"{flight_link}: Future Trip (CA: {captain_name}; {fo_status})")
+                        # SHOW DEBUG INFO
+                        leg_status = f"{leg_type} (CA: {captain_name}; {fo_status}) <br><strong style='color: red;'>DEBUG: FlightID:{actual.id} CrewCount:{len(crew_details)} <br> {debug_crew_str}</strong>"
                 else:
-                    details_html.append(f"{flight_link}: Future Trip (Not Scraped)")
-                
+                    leg_status = f"{leg_type} (Not Scraped)"
                 total_future_legs_global += 1
-                continue
+            else:
+                if actual:
+                    is_canceled = "CANCELED" in (actual.status or "").upper()
+                    if is_canceled:
+                        leg_status = "Canceled"
+                    else:
+                        student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
+                        if has_ioe_any:
+                            is_verified = True
+                            leg_status = f"Flown (Verified IOE: {', '.join(ioe_crew_names)})"
+                        elif student_present:
+                            legs_flown_by_student += 1
+                            total_flown_not_ioe_global += 1
+                            leg_status = f"Flown (Assigned Student Present, No IOE tags) <br><strong style='color: red;'>Crew: {debug_crew_str}</strong>"
+                        else:
+                            leg_status = f"not used for IOE <br><strong style='color: red;'>Flight:{actual.id} Crew: {debug_crew_str}</strong>"
+                elif leg_date.date() == now.date():
+                    leg_status = "In Progress (Not Scraped)"
             
-            leg_status = "Not Scraped"
-            
-            if not actual and leg_date.date() == now.date():
-                 leg_status = "In Progress (Not Scraped)"
-            elif actual:
-                 is_canceled = "CANCELED" in (actual.status or "").upper()
-                 if is_canceled:
-                     leg_status = "Canceled"
-                 else:
-                     student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
-                     
-                     # Prioritize IOE flags - if any pilot has IOE flag, count as IOE verified
-                     # This handles cases where a different student flew than originally assigned
-                     if has_ioe_any:
-                         legs_marked_ioe += 1
-                         leg_status = f"Flown (IOE: {', '.join(ioe_crew_names)})"
-                     elif student_present:
-                         # Assigned student flew but no IOE flags
-                         legs_flown_by_student += 1
-                         total_flown_not_ioe_global += 1
-                         leg_status = f"Flown (No IOE flags, Crew: {'; '.join(crew_details)})"
-                     else:
-                         # Neither IOE flags nor assigned student
-                         leg_status = f"not used for IOE (Crew: {'; '.join(crew_details)})"
+            if is_verified:
+                legs_marked_ioe += 1
             
             if leg_status == "Canceled":
                 total_legs -= 1
