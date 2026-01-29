@@ -147,7 +147,7 @@ def render_ioe_tab():
                     else:
                         fo_status = "No FO" if not fo_found else "FO Present (No IOE)"
                         # SHOW DEBUG INFO
-                        leg_status = f"{leg_type} (CA: {captain_name}; {fo_status}) <br><strong style='color: red;'>DEBUG: FlightID:{actual.id} CrewCount:{len(crew_details)} <br> {debug_crew_str}</strong>"
+                        leg_status = f"{leg_type} (CA: {captain_name}; {fo_status})"
                 else:
                     leg_status = f"{leg_type} (Not Scraped)"
                 total_future_legs_global += 1
@@ -164,9 +164,9 @@ def render_ioe_tab():
                         elif student_present:
                             legs_flown_by_student += 1
                             total_flown_not_ioe_global += 1
-                            leg_status = f"Flown (Assigned Student Present, No IOE tags) <br><strong style='color: red;'>Crew: {debug_crew_str}</strong>"
+                            leg_status = f"Flown (No IOE tags): {debug_crew_str}</strong>"
                         else:
-                            leg_status = f"not used for IOE <br><strong style='color: red;'>Flight:{actual.id} Crew: {debug_crew_str}</strong>"
+                            leg_status = f"not used for IOE: {debug_crew_str}</strong>"
                 elif leg_date.date() == now.date():
                     leg_status = "In Progress (Not Scraped)"
             
