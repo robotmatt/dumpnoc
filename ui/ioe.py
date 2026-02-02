@@ -186,7 +186,7 @@ def render_ioe_tab():
             details_html.append("⚠️ No schedule data found for this pairing")
 
         # Pairing Link
-        p_link = f"<a href='/pairings?pairing={assign.pairing_number}' target='_self' style='text-decoration:none; color:#E694FF;'>{assign.pairing_number}</a>"
+        p_link = f"<a href='/pairings?pairing={assign.pairing_number}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{assign.pairing_number}</a>"
         
         audit_results.append({
             "Check Airman": assign.employee_id,
@@ -320,15 +320,20 @@ def render_ioe_tab():
                     
                     if not scheduled:
                         pairing_num = "Unknown"
+                        p_link = "Unknown"
                     else:
                         pairing_num = scheduled.pairing_number
+                        p_link = f"<a href='/pairings?pairing={pairing_num}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{pairing_num}</a>"
                     
+                    # Clean flight number for the link
+                    f_link = f"<a href='/?date={flight.date.strftime('%Y-%m-%d')}&flight_num={flight_num_clean}' target='_self' style='text-decoration:none; font-weight:bold;'>{flight.flight_number}</a>"
+
                     # Check if this pairing is in the official IOE assignment list
                     if pairing_num not in assigned_pairings:
                         unscheduled_ioe.append({
                             "Date": flight.date.strftime("%Y-%m-%d"),
-                            "Flight": flight.flight_number,
-                            "Pairing": pairing_num,
+                            "Flight": f_link,
+                            "Pairing": p_link,
                             "Employee ID": crew.employee_id,
                             "Name": crew.name,
                             "Role": assoc.role,
@@ -342,7 +347,7 @@ def render_ioe_tab():
         if unscheduled_ioe:
             df_unscheduled = pd.DataFrame(unscheduled_ioe)
             st.warning(f"Found {len(unscheduled_ioe)} IOE flight(s) not in official assignments")
-            st.markdown(df_unscheduled.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
+            st.markdown(df_unscheduled.to_html(index=False, classes='dataframe', escape=False), unsafe_allow_html=True)
         else:
             st.success("✓ All IOE-flagged flights match official assignments")
     else:
@@ -445,8 +450,9 @@ def render_ioe_tab():
         for pairing, stats in pairing_stats.items():
             if stats['ioe_legs'] > 0:
                 date_range = sorted(list(stats['dates']))
+                p_link = f"<a href='/pairings?pairing={pairing}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{pairing}</a>"
                 adhoc_pairings.append({
-                    'Pairing': pairing,
+                    'Pairing': p_link,
                     'Total Legs': stats['total_legs'],
                     'IOE Legs': stats['ioe_legs'],
                     'IOE %': f"{(stats['ioe_legs'] / stats['total_legs'] * 100):.0f}%",
@@ -457,7 +463,7 @@ def render_ioe_tab():
             df_adhoc = pd.DataFrame(adhoc_pairings)
             df_adhoc = df_adhoc.sort_values('IOE Legs', ascending=False)
             st.warning(f"Found {len(adhoc_pairings)} pairing(s) used for IOE but not in official list")
-            st.markdown(df_adhoc.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
+            st.markdown(df_adhoc.to_html(index=False, classes='dataframe', escape=False), unsafe_allow_html=True)
         else:
             st.success("✓ No ad-hoc IOE pairings found")
     else:
