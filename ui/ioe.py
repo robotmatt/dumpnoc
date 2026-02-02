@@ -82,10 +82,11 @@ def render_ioe_tab():
             # Link Generation for Flight
             flight_link = f"<a href='/?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
             
-            candidates = [leg.flight_number, f"C5{leg.flight_number}", f"C{leg.flight_number}"]
+            candidates = [str(leg.flight_number), f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(
                 Flight.flight_number.in_(candidates), 
-                Flight.date == leg.date
+                Flight.date >= datetime.combine(leg_date.date(), datetime.min.time()),
+                Flight.date < datetime.combine(leg_date.date() + timedelta(days=1), datetime.min.time())
             ).first()
             
             crew_details = []
@@ -96,6 +97,7 @@ def render_ioe_tab():
             ioe_crew_names = []
 
             if actual:
+                caps = []
                 for cm in actual.crew_members:
                     assoc = session.execute(
                         flight_crew_association.select().where(
@@ -108,58 +110,68 @@ def render_ioe_tab():
                     if role and "FA" in role.upper():
                         continue
                         
+                    flags = (assoc.flags or "").upper()
                     name_role = f"{cm.name} ({role})"
-                    crew_details.append(name_role)
+                    crew_details.append(f"{name_role} [{flags}]")
                     
                     r_up = role.upper()
+                    
                     if "CAPTAIN" in r_up or "CA" == r_up:
-                         captain_name = cm.name
+                        caps.append(cm.name)
                     
                     if "FIRST OFFICER" in r_up or "FO" in r_up:
                          fo_found = True
                     
-                    if assoc and "IOE" in (assoc.flags or ""):
+                    if "IOE" in flags:
                         ioe_crew_names.append(name_role)
                         has_ioe_any = True
                         if "FIRST OFFICER" in r_up or "FO" in r_up:
                             has_ioe_fo = True
+                
+                if caps:
+                    captain_name = " & ".join(caps)
+            
+            # Status Determination
+            leg_status = "Not Scraped"
+            is_verified = False
+            
+            # Form debug string of all crew found
+            debug_crew_str = "; ".join(crew_details)
             
             if leg_date.date() > now.date():
+                leg_type = "Future Trip"
                 if actual:
-                    if has_ioe_fo:
-                        legs_marked_ioe += 1
-                        details_html.append(f"{flight_link}: Future Trip (IOE: {', '.join(ioe_crew_names)})")
+                    if has_ioe_any:
+                        is_verified = True
+                        leg_status = f"{leg_type} (Verified IOE: {', '.join(ioe_crew_names)})"
                     else:
                         fo_status = "No FO" if not fo_found else "FO Present (No IOE)"
-                        details_html.append(f"{flight_link}: Future Trip (CA: {captain_name}; {fo_status})")
+                        # SHOW DEBUG INFO
+                        leg_status = f"{leg_type} (CA: {captain_name}; {fo_status})"
                 else:
-                    details_html.append(f"{flight_link}: Future Trip (Not Scraped)")
-                
+                    leg_status = f"{leg_type} (Not Scraped)"
                 total_future_legs_global += 1
-                continue
+            else:
+                if actual:
+                    is_canceled = "CANCELED" in (actual.status or "").upper()
+                    if is_canceled:
+                        leg_status = "Canceled"
+                    else:
+                        student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
+                        if has_ioe_any:
+                            is_verified = True
+                            leg_status = f"Flown (Verified IOE: {', '.join(ioe_crew_names)})"
+                        elif student_present:
+                            legs_flown_by_student += 1
+                            total_flown_not_ioe_global += 1
+                            leg_status = f"Flown (No IOE tags): {debug_crew_str}</strong>"
+                        else:
+                            leg_status = f"not used for IOE: {debug_crew_str}</strong>"
+                elif leg_date.date() == now.date():
+                    leg_status = "In Progress (Not Scraped)"
             
-            leg_status = "Not Scraped"
-            
-            if not actual and leg_date.date() == now.date():
-                 leg_status = "In Progress (Not Scraped)"
-            elif actual:
-                 is_canceled = "CANCELED" in (actual.status or "").upper()
-                 if is_canceled:
-                     leg_status = "Canceled"
-                 else:
-                     student_present = any(c.employee_id == assign.employee_id for c in actual.crew_members)
-                     
-                     if student_present:
-                         legs_flown_by_student += 1
-                         leg_status = "Flown"
-                         if has_ioe_any:
-                             legs_marked_ioe += 1
-                             leg_status += f" (IOE: {', '.join(ioe_crew_names)})"
-                         else:
-                             total_flown_not_ioe_global += 1
-                             leg_status += f" (No IOE flags, Crew: {'; '.join(crew_details)})"
-                     else:
-                         leg_status = f"not used for IOE (Crew: {'; '.join(crew_details)})"
+            if is_verified:
+                legs_marked_ioe += 1
             
             if leg_status == "Canceled":
                 total_legs -= 1
@@ -174,7 +186,7 @@ def render_ioe_tab():
             details_html.append("⚠️ No schedule data found for this pairing")
 
         # Pairing Link
-        p_link = f"<a href='/pairings?pairing={assign.pairing_number}' target='_self' style='text-decoration:none; color:#E694FF;'>{assign.pairing_number}</a>"
+        p_link = f"<a href='/pairings?pairing={assign.pairing_number}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{assign.pairing_number}</a>"
         
         audit_results.append({
             "Check Airman": assign.employee_id,
@@ -308,15 +320,20 @@ def render_ioe_tab():
                     
                     if not scheduled:
                         pairing_num = "Unknown"
+                        p_link = "Unknown"
                     else:
                         pairing_num = scheduled.pairing_number
+                        p_link = f"<a href='/pairings?pairing={pairing_num}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{pairing_num}</a>"
                     
+                    # Clean flight number for the link
+                    f_link = f"<a href='/?date={flight.date.strftime('%Y-%m-%d')}&flight_num={flight_num_clean}' target='_self' style='text-decoration:none; font-weight:bold;'>{flight.flight_number}</a>"
+
                     # Check if this pairing is in the official IOE assignment list
                     if pairing_num not in assigned_pairings:
                         unscheduled_ioe.append({
                             "Date": flight.date.strftime("%Y-%m-%d"),
-                            "Flight": flight.flight_number,
-                            "Pairing": pairing_num,
+                            "Flight": f_link,
+                            "Pairing": p_link,
                             "Employee ID": crew.employee_id,
                             "Name": crew.name,
                             "Role": assoc.role,
@@ -330,7 +347,7 @@ def render_ioe_tab():
         if unscheduled_ioe:
             df_unscheduled = pd.DataFrame(unscheduled_ioe)
             st.warning(f"Found {len(unscheduled_ioe)} IOE flight(s) not in official assignments")
-            st.markdown(df_unscheduled.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
+            st.markdown(df_unscheduled.to_html(index=False, classes='dataframe', escape=False), unsafe_allow_html=True)
         else:
             st.success("✓ All IOE-flagged flights match official assignments")
     else:
@@ -433,8 +450,9 @@ def render_ioe_tab():
         for pairing, stats in pairing_stats.items():
             if stats['ioe_legs'] > 0:
                 date_range = sorted(list(stats['dates']))
+                p_link = f"<a href='/pairings?pairing={pairing}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{pairing}</a>"
                 adhoc_pairings.append({
-                    'Pairing': pairing,
+                    'Pairing': p_link,
                     'Total Legs': stats['total_legs'],
                     'IOE Legs': stats['ioe_legs'],
                     'IOE %': f"{(stats['ioe_legs'] / stats['total_legs'] * 100):.0f}%",
@@ -445,7 +463,7 @@ def render_ioe_tab():
             df_adhoc = pd.DataFrame(adhoc_pairings)
             df_adhoc = df_adhoc.sort_values('IOE Legs', ascending=False)
             st.warning(f"Found {len(adhoc_pairings)} pairing(s) used for IOE but not in official list")
-            st.markdown(df_adhoc.to_html(index=False, classes='dataframe'), unsafe_allow_html=True)
+            st.markdown(df_adhoc.to_html(index=False, classes='dataframe', escape=False), unsafe_allow_html=True)
         else:
             st.success("✓ No ad-hoc IOE pairings found")
     else:
