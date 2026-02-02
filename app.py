@@ -34,6 +34,8 @@ page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_pa
 # Initialize navigation but hide sidebar UI
 pg = st.navigation([page_hist, page_pair, page_ioe, page_emp, page_sync, page_sett], position="hidden")
 
+st.title("✈️ NOC Mobile Scraper & Archiver")
+
 # --- Top Navigation ---
 nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1, 1, 1.2, 1, 1, 2])
 with nc1:
@@ -50,8 +52,6 @@ with nc6:
     st.page_link(page_sett, label="Settings", icon="⚙️")
 
 st.divider()
-
-st.title("✈️ NOC Mobile Scraper & Archiver")
 
 # Global CSS for table styling
 st.markdown("""
@@ -98,17 +98,6 @@ current_page = st.session_state.get("current_page")
 # but we can check if credentials exist before running any data-intensive page.
 # render_sync_tab specifically needs them.
 
-# --- Sync Status Summary ---
-session = get_db_session()
-global_last_sync = get_metadata(session, "last_successful_sync")
-last_sync_rec = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
-session.close()
-
-if global_last_sync:
-    st.info(f"📊 **Data Freshness:** Last pull performed at {global_last_sync}")
-if last_sync_rec:
-    st.caption(f"Last data point synced: {last_sync_rec.date.strftime('%Y-%m-%d')} ({last_sync_rec.flights_found} flights)")
-
 # --- Navigation & Query Params Logic ---
 query_params = st.query_params
 
@@ -128,11 +117,16 @@ if "flight_num" in query_params:
 if "month" in query_params:
     st.session_state["pairing_month_default"] = query_params["month"]
 
-if "pdate" in query_params:
     try:
         st.session_state["pairing_date_default"] = datetime.strptime(query_params["pdate"], "%Y-%m-%d").date()
     except:
         pass
+
+if "emp_id" in query_params:
+    st.session_state["employee_search_id"] = query_params["emp_id"]
+
+if "emp_month" in query_params:
+    st.session_state["employee_search_month"] = query_params["emp_month"]
 
 # Run the page logic
 pg.run()
