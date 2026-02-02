@@ -21,19 +21,21 @@ from ui.historical import render_historical_tab
 from ui.pairings import render_pairings_tab
 from ui.ioe import render_ioe_tab
 from ui.sync import render_sync_tab
+from ui.employee import render_employee_tab
 from ui.settings import render_settings_tab
 
 page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
+page_emp = st.Page(render_employee_tab, title="Employee History", icon="👤", url_path="employee")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_pair, page_ioe, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_hist, page_pair, page_ioe, page_emp, page_sync, page_sett], position="hidden")
 
 # --- Top Navigation ---
-nc1, nc2, nc3, nc4, nc5, n_spacer = st.columns([1.2, 1, 1, 1, 1, 3])
+nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1, 1, 1.2, 1, 1, 2])
 with nc1:
     st.page_link(page_hist, label="Historical Data", icon="📅")
 with nc2:
@@ -41,8 +43,10 @@ with nc2:
 with nc3:
     st.page_link(page_ioe, label="IOE Audit", icon="🎓")
 with nc4:
-    st.page_link(page_sync, label="Sync Data", icon="🔄")
+    st.page_link(page_emp, label="Employee", icon="👤")
 with nc5:
+    st.page_link(page_sync, label="Sync Data", icon="🔄")
+with nc6:
     st.page_link(page_sett, label="Settings", icon="⚙️")
 
 st.divider()
