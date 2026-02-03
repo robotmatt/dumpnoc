@@ -32,20 +32,46 @@ page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="s
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_pair, page_ioe, page_emp, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_hist, page_emp, page_pair, page_ioe, page_sync, page_sett], position="hidden")
 
-st.title("✈️ NOC Mobile Scraper & Archiver")
+# --- Top Header & Navigation ---
+# Using custom CSS to inject title into the top area and style the nav
+st.markdown("""
+<style>
+    [data-testid="stAppHeader"] {
+        background-color: transparent !important;
+    }
+    .header-title {
+        text-align: left;
+        width: 100%;
+        margin-top: -3rem;
+        margin-bottom: 0.5rem;
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #FFFFFF;
+    }
+    .stHorizontalBlock {
+        margin-top: 0rem !important;
+    }
+    th {
+        text-align: center !important;
+    }
+    .stPageLink {
+        background-color: transparent !important;
+    }
+</style>
+<div class="header-title">✈️ NOC Mobile Scraper & Archiver</div>
+""", unsafe_allow_html=True)
 
-# --- Top Navigation ---
-nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1, 1, 1.2, 1, 1, 2])
+nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1.2, 1, 1, 1, 1, 1.6])
 with nc1:
     st.page_link(page_hist, label="Historical Data", icon="📅")
 with nc2:
-    st.page_link(page_pair, label="Pairings", icon="📋")
-with nc3:
-    st.page_link(page_ioe, label="IOE Audit", icon="🎓")
-with nc4:
     st.page_link(page_emp, label="Employee", icon="👤")
+with nc3:
+    st.page_link(page_pair, label="Pairings", icon="📋")
+with nc4:
+    st.page_link(page_ioe, label="IOE Audit", icon="🎓")
 with nc5:
     st.page_link(page_sync, label="Sync Data", icon="🔄")
 with nc6:
@@ -53,7 +79,7 @@ with nc6:
 
 st.divider()
 
-# Global CSS for table styling
+# Global CSS for table styling (continued)
 st.markdown("""
 <style>
     th {
