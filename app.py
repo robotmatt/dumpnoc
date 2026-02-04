@@ -21,35 +21,65 @@ from ui.historical import render_historical_tab
 from ui.pairings import render_pairings_tab
 from ui.ioe import render_ioe_tab
 from ui.sync import render_sync_tab
+from ui.employee import render_employee_tab
 from ui.settings import render_settings_tab
 
 page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
+page_emp = st.Page(render_employee_tab, title="Employee History", icon="👤", url_path="employee")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_pair, page_ioe, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_hist, page_emp, page_pair, page_ioe, page_sync, page_sett], position="hidden")
 
-# --- Top Navigation ---
-nc1, nc2, nc3, nc4, nc5, n_spacer = st.columns([1.2, 1, 1, 1, 1, 3])
+# --- Top Header & Navigation ---
+# Using custom CSS to inject title into the top area and style the nav
+st.markdown("""
+<style>
+    [data-testid="stAppHeader"] {
+        background-color: transparent !important;
+    }
+    .header-title {
+        text-align: left;
+        width: 100%;
+        margin-top: -3rem;
+        margin-bottom: 0.5rem;
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #FFFFFF;
+    }
+    .stHorizontalBlock {
+        margin-top: 0rem !important;
+    }
+    th {
+        text-align: center !important;
+    }
+    .stPageLink {
+        background-color: transparent !important;
+    }
+</style>
+<div class="header-title">✈️ NOC Mobile Scraper & Archiver</div>
+""", unsafe_allow_html=True)
+
+nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1.2, 1, 1, 1, 1, 1.6])
 with nc1:
     st.page_link(page_hist, label="Historical Data", icon="📅")
 with nc2:
-    st.page_link(page_pair, label="Pairings", icon="📋")
+    st.page_link(page_emp, label="Employee", icon="👤")
 with nc3:
-    st.page_link(page_ioe, label="IOE Audit", icon="🎓")
+    st.page_link(page_pair, label="Pairings", icon="📋")
 with nc4:
-    st.page_link(page_sync, label="Sync Data", icon="🔄")
+    st.page_link(page_ioe, label="IOE Audit", icon="🎓")
 with nc5:
+    st.page_link(page_sync, label="Sync Data", icon="🔄")
+with nc6:
     st.page_link(page_sett, label="Settings", icon="⚙️")
 
 st.divider()
 
-st.title("✈️ NOC Mobile Scraper & Archiver")
-
-# Global CSS for table styling
+# Global CSS for table styling (continued)
 st.markdown("""
 <style>
     th {
@@ -94,17 +124,6 @@ current_page = st.session_state.get("current_page")
 # but we can check if credentials exist before running any data-intensive page.
 # render_sync_tab specifically needs them.
 
-# --- Sync Status Summary ---
-session = get_db_session()
-global_last_sync = get_metadata(session, "last_successful_sync")
-last_sync_rec = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
-session.close()
-
-if global_last_sync:
-    st.info(f"📊 **Data Freshness:** Last pull performed at {global_last_sync}")
-if last_sync_rec:
-    st.caption(f"Last data point synced: {last_sync_rec.date.strftime('%Y-%m-%d')} ({last_sync_rec.flights_found} flights)")
-
 # --- Navigation & Query Params Logic ---
 query_params = st.query_params
 
@@ -124,11 +143,16 @@ if "flight_num" in query_params:
 if "month" in query_params:
     st.session_state["pairing_month_default"] = query_params["month"]
 
-if "pdate" in query_params:
     try:
         st.session_state["pairing_date_default"] = datetime.strptime(query_params["pdate"], "%Y-%m-%d").date()
     except:
         pass
+
+if "emp_id" in query_params:
+    st.session_state["employee_search_id"] = query_params["emp_id"]
+
+if "emp_month" in query_params:
+    st.session_state["employee_search_month"] = query_params["emp_month"]
 
 # Run the page logic
 pg.run()

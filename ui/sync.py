@@ -1,17 +1,29 @@
 
 import streamlit as st
 from datetime import datetime, timedelta
-from database import get_session, get_metadata
+from database import get_session, get_metadata, DailySyncStatus
 from scraper import NOCScraper
 from config import NOC_USERNAME, NOC_PASSWORD
 from firestore_lib import is_cloud_sync_enabled
+from sqlalchemy import desc
 
 def render_sync_tab():
     username = st.session_state.get("username")
     password = st.session_state.get("password")
     
+    # --- Sync Status Summary ---
+    session = get_session()
+    global_last_sync = get_metadata(session, "last_successful_sync")
+    last_sync_rec = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
+    session.close()
+    
     st.header("Sync Settings")
     
+    if global_last_sync:
+        st.info(f"📊 **Data Freshness:** Last pull performed at {global_last_sync}")
+    if last_sync_rec:
+        st.caption(f"Last data point synced: {last_sync_rec.date.strftime('%Y-%m-%d')} ({last_sync_rec.flights_found} flights)")
+
     # Cloud Configuration Check (using dynamic setting)
     active_cloud_sync = is_cloud_sync_enabled()
     
