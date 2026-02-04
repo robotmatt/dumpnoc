@@ -29,21 +29,33 @@ def render_employee_tab():
     session = get_session()
     
     # Search logic: Exact match on ID or partial match on Name
-    crew_member = session.query(CrewMember).filter(
+    crew_members = session.query(CrewMember).filter(
         or_(
             CrewMember.employee_id == search_term,
             CrewMember.name.ilike(f"%{search_term}%")
         )
-    ).first()
+    ).all()
+    
+    selected_crew = None
+    if crew_members:
+        if len(crew_members) > 1:
+            st.info(f"Multiple matches found for '{search_term}'. Select one to view history:")
+            options = {f"{c.name} ({c.employee_id})": c for c in crew_members}
+            # Sort by name
+            sorted_labels = sorted(options.keys())
+            choice = st.radio("Select Employee", sorted_labels, label_visibility="collapsed")
+            selected_crew = options[choice]
+        else:
+            selected_crew = crew_members[0]
     
     employee_id = None
     employee_name = None
     crew_id_pk = None
     
-    if crew_member:
-        employee_id = crew_member.employee_id
-        employee_name = crew_member.name
-        crew_id_pk = crew_member.id
+    if selected_crew:
+        employee_id = selected_crew.employee_id
+        employee_name = selected_crew.name
+        crew_id_pk = selected_crew.id
     else:
         # Fallback: Check if it's a raw ID in assignments
         assignment_check = session.query(IOEAssignment).filter(
