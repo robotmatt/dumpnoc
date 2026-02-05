@@ -9,3 +9,4 @@ psycopg2-binary
 google-cloud-firestore
 firebase-admin
 watchdog
+pypdf

@@ -11,7 +11,7 @@ echo [INFO] Using Python command: !PY_CMD!
 
 :: 1. Check/Install Dependencies
 echo [INFO] Checking dependencies...
-!PY_CMD! -c "import streamlit; import firebase_admin; import sqlalchemy; import pandas; import playwright; import bs4; import google.cloud.firestore" >nul 2>&1
+!PY_CMD! -c "import streamlit; import firebase_admin; import sqlalchemy; import pandas; import playwright; import bs4; import google.cloud.firestore; import pypdf" >nul 2>&1
 if !ERRORLEVEL! neq 0 (
     echo [INFO] Installing missing dependencies globally...
     !PY_CMD! -m pip install --upgrade pip

@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from database import get_session, IOEAssignment, ScheduledFlight, Flight, flight_crew_association
+from database import get_session, IOEAssignment, ScheduledFlight, Flight, flight_crew_association, LCP, CrewMember
 from bid_periods import get_bid_period_date_range, get_bid_period_from_date
 
 def render_ioe_tab():
@@ -29,6 +29,7 @@ def render_ioe_tab():
     
     selected_month_str = st.selectbox("Select Bid Period", months, index=default_idx) if months else None
     
+    assignments = []
     if selected_month_str:
         sel_month_dt = datetime.strptime(selected_month_str, "%B %Y")
         bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
@@ -40,8 +41,173 @@ def render_ioe_tab():
             IOEAssignment.start_date >= start_dt,
             IOEAssignment.start_date < end_dt
         ).order_by(IOEAssignment.start_date.asc()).all()
-    else:
-        assignments = []
+    
+    session.close()
+
+    tab1, tab2 = st.tabs(["Assignments Audit", "Available LCP Trips"])
+    
+    with tab1:
+        _render_audit_content(selected_month_str, assignments)
+        
+    with tab2:
+        _render_lcp_section(selected_month_str)
+
+def _render_lcp_section(selected_month_str):
+    st.subheader("Available LCP Trips")
+    st.caption("Trips with a Line Check Pilot (LCP) in the crew that are not assigned as IOE.")
+    
+    session = get_session()
+    
+    lcp_list = session.query(LCP).all()
+    if not lcp_list:
+        st.warning("No LCPs found. Please create a text file in 'lcp/' folder with LCP IDs and names (e.g. '12345 Name') and restart/ingest.")
+        session.close()
+        return
+
+    lcp_ids = {l.employee_id: l.name for l in lcp_list}
+    
+    if not selected_month_str:
+        st.info("Select a month.")
+        session.close()
+        return
+        
+    # Get Date Range
+    sel_month_dt = datetime.strptime(selected_month_str, "%B %Y")
+    bp_start, bp_end = get_bid_period_date_range(sel_month_dt.year, sel_month_dt.month)
+    start_dt = datetime.combine(bp_start, datetime.min.time())
+    end_dt = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
+    
+    now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    query_start = max(start_dt, now)
+
+    # 1. Get Flights with LCPs
+    flights = session.query(Flight).join(
+        flight_crew_association, Flight.id == flight_crew_association.c.flight_id
+    ).join(
+        CrewMember, flight_crew_association.c.crew_id == CrewMember.id
+    ).filter(
+        Flight.date >= query_start,
+        Flight.date < end_dt,
+        CrewMember.employee_id.in_(lcp_ids.keys())
+    ).all()
+    
+    # 2. Get IOE Assignments to exclude
+    assigned_keys = set()
+    assigns = session.query(IOEAssignment).filter(
+        IOEAssignment.start_date >= start_dt,
+        IOEAssignment.start_date < end_dt + timedelta(days=10) 
+    ).all()
+    for a in assigns:
+        assigned_keys.add((a.pairing_number, a.start_date.strftime('%Y-%m-%d')))
+        
+    # Also exclude any pairings that already have IOE flags in the scraped data
+    # (Ad-hoc IOE)
+    ioe_scraped = session.query(Flight).join(
+        flight_crew_association, Flight.id == flight_crew_association.c.flight_id
+    ).filter(
+        Flight.date >= start_dt,
+        Flight.date < end_dt,
+        flight_crew_association.c.flags.like('%IOE%')
+    ).all()
+    
+    for f in ioe_scraped:
+        f_num_clean = f.flight_number
+        if f_num_clean.startswith('C5'): f_num_clean = f_num_clean[2:]
+        elif f_num_clean.startswith('C'): f_num_clean = f_num_clean[1:]
+        
+        # Determine its pairing
+        sf_ioe = session.query(ScheduledFlight).filter(
+            ScheduledFlight.flight_number == f_num_clean,
+            ScheduledFlight.date == f.date
+        ).first()
+        
+        if sf_ioe:
+             p_start_ioe = sf_ioe.pairing_start_date or sf_ioe.date
+             assigned_keys.add((sf_ioe.pairing_number, p_start_ioe.strftime('%Y-%m-%d')))
+        
+    # 3. Process Flights -> Pairings
+    available_pairings = {} 
+    
+    for f in flights:
+        lcp_on_board = []
+        for c in f.crew_members:
+            if c.employee_id in lcp_ids:
+                lcp_on_board.append(f"{c.name} ({lcp_ids[c.employee_id]})" if lcp_ids[c.employee_id] else c.name)
+                
+        if not lcp_on_board: continue 
+        
+        f_num_clean = f.flight_number
+        if f_num_clean.startswith('C5'): f_num_clean = f_num_clean[2:]
+        elif f_num_clean.startswith('C'): f_num_clean = f_num_clean[1:]
+        
+        # Find potential scheduled pairings for this flight/date
+        sf_candidates = session.query(ScheduledFlight).filter(
+            ScheduledFlight.flight_number == f_num_clean,
+            ScheduledFlight.date == f.date
+        ).all()
+        
+        sf = None
+        if sf_candidates:
+            if len(sf_candidates) == 1:
+                sf = sf_candidates[0]
+            else:
+                # Resolve by airport if multiple flights with same number on same day (rare but possible)
+                for cand in sf_candidates:
+                    if f.departure_airport and cand.departure_airport and f.departure_airport.startswith(cand.departure_airport):
+                        sf = cand
+                        break
+                if not sf:
+                    sf = sf_candidates[0] # Fallback
+        
+        if not sf: continue
+        
+        p_num = sf.pairing_number
+        p_start = sf.pairing_start_date
+        if not p_start: p_start = sf.date 
+        
+        p_start_str = p_start.strftime('%Y-%m-%d')
+        
+        if (p_num, p_start_str) in assigned_keys:
+            continue
+            
+        key = (p_num, p_start_str)
+        if key not in available_pairings:
+            available_pairings[key] = {
+                "LCP": ", ".join(set(lcp_on_board)),
+                "Pairing": p_num,
+                "Start Date": p_start.strftime('%Y-%m-%d'),
+                "Legs": 0,
+                "Route": f"{sf.departure_airport}",
+                "DateObj": p_start
+            }
+        available_pairings[key]["Legs"] += 1
+        
+    session.close()
+    
+    if not available_pairings:
+        st.info("No available LCP trips found for this period.")
+        return
+        
+    # Display
+    df = pd.DataFrame(available_pairings.values())
+    df = df.sort_values("DateObj")
+    
+    # Formatting
+    import urllib.parse
+    encoded_month = urllib.parse.quote(selected_month_str)
+
+    def make_link(val):
+         return f"<a href='/pairings?pairing={val}&month={encoded_month}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{val}</a>"
+         
+    df["Pairing"] = df["Pairing"].apply(make_link)
+    display_df = df[["Start Date", "LCP", "Pairing", "Legs", "Route"]]
+    
+    # Using Markdown for HTML links
+    st.markdown(display_df.to_html(escape=False, index=False, classes='dataframe'), unsafe_allow_html=True)
+
+
+def _render_audit_content(selected_month_str, assignments):
+    session = get_session()
     
     audit_results = []
     

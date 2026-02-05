@@ -96,6 +96,12 @@ class IOEAssignment(Base):
     pairing_number = Column(String)
     start_date = Column(DateTime)
 
+class LCP(Base):
+    __tablename__ = 'lcp'
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(String, unique=True, index=True)
+    name = Column(String, nullable=True) # Optional, captured if available in import
+
 class DailySyncStatus(Base):
     __tablename__ = 'daily_sync_status'
 

@@ -312,6 +312,7 @@ __marimo__/
 # ignore the ioe and pairings directories
 ioe/
 pairings/
+lcp/   
 
 # ignore noc_data.db
 noc_data.db
