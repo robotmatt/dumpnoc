@@ -26,7 +26,7 @@ if [ ! -f "$VENV_PYTHON" ]; then
 fi
 
 # 3. Check/Install Dependencies
-if ! "$VENV_PYTHON" -c "import streamlit; import firebase_admin" &> /dev/null; then
+if ! "$VENV_PYTHON" -c "import streamlit; import firebase_admin; import pypdf" &> /dev/null; then
     echo "Installing dependencies into virtual environment..."
     "$VENV_PYTHON" -m pip install --upgrade pip
     "$VENV_PYTHON" -m pip install -r requirements.txt

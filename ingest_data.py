@@ -1,11 +1,12 @@
 import re
 import os
 from datetime import datetime, timedelta
-from database import get_session, ScheduledFlight, IOEAssignment, init_db
+from database import get_session, ScheduledFlight, IOEAssignment, LCP, init_db
 from bid_periods import get_bid_period_date_range
 
 PAIRINGS_DIR = "pairings"
 IOE_DIR = "ioe"
+LCP_DIR = "lcp"
 
 def ingest_all(session):
     # IOE Files
@@ -19,6 +20,15 @@ def ingest_all(session):
         for f in os.listdir(PAIRINGS_DIR):
             if f.endswith(".txt") and not f.startswith("._"):
                 parse_pairings_file(os.path.join(PAIRINGS_DIR, f), session)
+
+    # LCP Files
+    if os.path.exists(LCP_DIR):
+        for f in os.listdir(LCP_DIR):
+            if not f.startswith("._"):
+                 if f.endswith(".txt"):
+                    parse_lcp_file(os.path.join(LCP_DIR, f), session)
+                 elif f.endswith(".pdf"):
+                    parse_lcp_pdf(os.path.join(LCP_DIR, f), session)
 
 def parse_ioe_file(filepath, session):
     print(f"Parsing IOE file: {filepath}")
@@ -261,6 +271,112 @@ def parse_pairings_file(filepath, session):
         
     session.commit()
     print(f"Imported {import_count} pairings.")
+
+def parse_lcp_file(filepath, session):
+    print(f"Parsing LCP file: {filepath}")
+    with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+    
+    count = 0
+    # We assume a simple list format: "12345 Name Name" or just lines containing IDs
+    # We will clear the table if it's a full refresh? 
+    # For now, let's just Upsert or Insert if missing.
+    # Actually, main clears the table.
+    
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        
+        # Look for 5 digit ID
+        # Strict 5 digit? Matches Employee IDs.
+        match = re.search(r'\b(\d{5})\b', line)
+        if match:
+            emp_id = match.group(1)
+            # Try to extract name
+            # Remove ID and clean
+            name_part = line.replace(emp_id, "").strip()
+            # Remove common junk
+            name_part = re.sub(r'[^\w\s,]', '', name_part) # Remove special chars
+            
+            # Save
+            lcp = LCP(employee_id=emp_id, name=name_part)
+            session.add(lcp)
+            count += 1
+            
+    session.commit()
+    print(f"Imported {count} LCPs.")
+
+def parse_lcp_pdf(filepath, session):
+    print(f"Parsing LCP PDF: {filepath}")
+    import pypdf
+    
+    count = 0
+    try:
+        reader = pypdf.PdfReader(filepath)
+        full_text = ""
+        for page in reader.pages:
+            full_text += page.extract_text() + "\n"
+            
+        lines = full_text.split('\n')
+        
+        # We need to capture the ID (5-6 digits) and Name, but ONLY if the line contains "XMJ Line Check Pilot".
+        # Note: Some IDs like '600432' are 6 digits.
+        
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            
+            # Filter first: Must contain "XMJ Line Check Pilot"
+            # User requirement: "we care about the employee IDs that have "XMJ Line Check Pilot" as the qualification"
+            # STRICT FILTER: ONLY matching exact string.
+            if "XMJ Line Check Pilot" not in line:
+                continue
+            
+            # Extract ID
+            # Look for 5 or 6 digit number
+            id_match = re.search(r'\b(\d{5,6})\b', line)
+            if not id_match: continue
+            
+            emp_id = id_match.group(1)
+            
+            # Extract Name
+            # The name appears to be at the start of the line, BEFORE the ID.
+            # "NAME 103780 ..."
+            # So we take everything before the ID match start index
+            id_start = id_match.start()
+            name_part = line[:id_start].strip()
+            
+            # Clean name (remove extra spaces)
+            name_part = " ".join(name_part.split())
+            
+            if len(name_part) < 2: continue
+            
+            # Upsert
+            try:
+                # Simple overwrite check
+                # We have multiple entries for the same person (e.g. APD and Line Check Pilot lines)
+                # We just need them once.
+                existing = session.query(LCP).filter_by(employee_id=emp_id).first()
+                if existing:
+                   existing.name = name_part
+                else:
+                   lcp = LCP(employee_id=emp_id, name=name_part)
+                   session.add(lcp)
+                   # Flush here to catch integrity error immediately if session has pending duplicates?
+                   # Or just trust the query above.
+                   session.flush()
+                   
+                count += 1
+            except:
+                # If duplicate in session/flush
+                session.rollback()
+                pass
+                
+        session.commit()
+        print(f"Imported {count} LCPs from PDF.")
+        
+    except Exception as e:
+        print(f"Error parsing PDF {filepath}: {e}")
 
 def save_pairing(session, pairing_id, month_year, start_dates, legs, total_credit):
     # Process legs to handle Day inheritance
@@ -728,11 +844,15 @@ if __name__ == "__main__":
     from firestore_lib import set_cloud_sync_enabled, is_cloud_sync_enabled
     from config import ENABLE_CLOUD_SYNC
     
+    # 0. Ensure Schema exists
+    init_db()
+
     # 1. Clear old data to prevent duplicates
     session = get_session()
     print("Clearing existing ScheduledFlight and IOEAssignment data...")
     session.query(ScheduledFlight).delete()
     session.query(IOEAssignment).delete()
+    session.query(LCP).delete()
     session.commit()
     
     # 2. Ingest
