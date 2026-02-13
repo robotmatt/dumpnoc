@@ -3,11 +3,16 @@ setlocal EnableDelayedExpansion
 
 :: 0. Find a working Python command
 set PY_CMD=python
-py --version >nul 2>&1
-if !ERRORLEVEL! equ 0 (
-    set PY_CMD=py
+if exist venv\Scripts\python.exe (
+    set PY_CMD=venv\Scripts\python.exe
+    echo [INFO] Using virtual environment Python.
+) else (
+    py --version >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        set PY_CMD=py
+    )
+    echo [INFO] Using system-wide Python command: !PY_CMD!
 )
-echo [INFO] Using Python command: !PY_CMD!
 
 :: 1. Check/Install Dependencies
 echo [INFO] Checking dependencies...
