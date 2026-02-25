@@ -8,8 +8,10 @@ from database import get_session, Flight, CrewMember, DailySyncStatus, init_db, 
 from sqlalchemy import desc, extract
 from bid_periods import get_bid_period_date_range, get_bid_period_from_date
 from firestore_lib import set_cloud_sync_enabled
-from scheduler_worker import start_background_scheduler
+from logger_util import init_logging
+init_logging()
 
+from scheduler_worker import start_background_scheduler
 # Start Background Scraper
 start_background_scheduler()
 
@@ -156,4 +158,24 @@ if "emp_month" in query_params:
 
 # Run the page logic
 pg.run()
+
+# --- Terminal Logs ---
+from logger_util import log_buffer
+st.divider()
+with st.expander("🛠️ Terminal Logs", expanded=False):
+    logs = log_buffer.get_all()
+    if logs:
+        # Show last 100 lines for performance
+        log_text = "\n".join(logs[-100:])
+        st.code(log_text, language="text", wrap_lines=True)
+        col_l, col_r = st.columns([1, 1])
+        with col_l:
+            if st.button("Refresh Logs", key="refresh_logs_sys"):
+                st.rerun()
+        with col_r:
+            if st.button("Clear Logs", key="clear_logs_sys"):
+                log_buffer.buffer.clear()
+                st.rerun()
+    else:
+        st.caption("No logs yet.")
 

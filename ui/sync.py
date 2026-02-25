@@ -6,6 +6,7 @@ from scraper import NOCScraper
 from config import NOC_USERNAME, NOC_PASSWORD
 from firestore_lib import is_cloud_sync_enabled
 from sqlalchemy import desc
+from logger_util import log_buffer
 
 def render_sync_tab():
     username = st.session_state.get("username")
@@ -71,8 +72,14 @@ def render_sync_tab():
                     total_days = (end_date - start_date).days + 1
                     days_done = 0
                     
+                    log_area = st.empty()
+                    def update_logs():
+                        with log_area:
+                            st.code("\n".join(log_buffer.get_last(15)), language="text")
+
                     while curr <= end_date:
                         status_area.write(f"Scraping {curr.strftime('%Y-%m-%d')}...")
+                        update_logs()
                         
                         s_dt = datetime.combine(curr, datetime.min.time())
                         scraper.scrape_date(s_dt)
@@ -80,8 +87,10 @@ def render_sync_tab():
                         days_done += 1
                         progress_bar.progress(days_done / total_days)
                         curr += timedelta(days=1)
+                        update_logs()
                         
                     status_area.success("Sync Complete! Check the Historical Data tab.")
+                    update_logs()
                 else:
                     status_area.error("Login failed. Please check your credentials.")
             except Exception as e:
@@ -125,20 +134,30 @@ def render_sync_tab():
                 session = get_session()
                 from ingest_data import upload_ioe_to_cloud, upload_pairings_to_cloud, upload_flights_to_cloud, upload_metadata_to_cloud
                 
+                log_area = st.empty()
+                def update_logs():
+                    with log_area:
+                        st.code("\n".join(log_buffer.get_last(15)), language="text")
+
+                update_logs()
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering IOE assignments...")
                 cnt_ioe = upload_ioe_to_cloud(session)
+                update_logs()
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_ioe} IOE records.")
                 
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering scheduled pairings...")
                 cnt_pair = upload_pairings_to_cloud(session)
+                update_logs()
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_pair} pairing bundles.")
                 
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Gathering historical flight data (this may take a moment)...")
                 cnt_flt = upload_flights_to_cloud(session) # No date range = all
+                update_logs()
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Uploaded {cnt_flt} daily flight blocks.")
                 
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Syncing application metadata...")
                 cnt_meta = upload_metadata_to_cloud(session)
+                update_logs()
                 status.write(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Metadata sync complete.")
                 
                 session.close()
