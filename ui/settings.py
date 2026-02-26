@@ -57,7 +57,7 @@ def render_settings_tab():
     current_days_db = get_metadata(session, "scrape_days")
     from config import SCRAPE_DAYS
     initial_days = int(current_days_db) if current_days_db else SCRAPE_DAYS
-    new_days = st.number_input("Days to Scrape", min_value=1, max_value=14, value=initial_days)
+    new_days = st.number_input("Days to Scrape", min_value=1, max_value=45, value=initial_days)
 
     next_scrape = get_metadata(session, "next_scheduled_scrape")
     if next_scrape:
