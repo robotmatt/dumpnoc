@@ -53,6 +53,19 @@ The application includes a background scheduler that runs independently of the w
 *   **🎓 IOE Audit**: Run reports to see which IOE assignments have been completed and which legs are missing student/check-airman data.
 *   **🔄 Sync Data**: Manually trigger pulls from NOC Mobile for specific date ranges or mirror/restore your local database with Google Firestore.
 
+### LCP
+To import Line Check Pilots (LCPs):
+1. Create a text file in this directory (e.g. "LCP_List.txt").
+2. Paste the list of LCPs.
+   Format: Lines containing the 5-digit Employee ID and Name.
+   Example:
+   12345 PILOT NAME A
+   67890 PILOT NAME B
+3. Go to the "Sync Data" tab in the app and run "Ingest Data from Files".
+   Or restart the application.
+
+Note: PDF files are not automatically parsed. Please convert to text.
+
 ## Database
 
 By default, data is stored in `noc_data.db` (SQLite). 
