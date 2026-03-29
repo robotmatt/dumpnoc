@@ -30,13 +30,12 @@ from ui.settings import render_settings_tab
 page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
-page_emp = st.Page(render_employee_tab, title="Employee History", icon="👤", url_path="employee")
 page_roster = st.Page(render_roster_tab, title="Roster", icon="🗓️", url_path="roster")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_roster, page_emp, page_pair, page_ioe, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_hist, page_roster, page_pair, page_ioe, page_sync, page_sett], position="hidden")
 
 # --- Top Header & Navigation ---
 # Using custom CSS to inject title into the top area and style the nav
@@ -67,20 +66,18 @@ st.markdown("""
 <div class="header-title">✈️ NOC Mobile Scraper & Archiver</div>
 """, unsafe_allow_html=True)
 
-nc1, nc2, nc3, nc4, nc5, nc6, nc7, n_spacer = st.columns([1, 1.2, 1, 1, 1, 1, 1, 0.6])
+nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1, 1.2, 1, 1, 1, 1, 1.6])
 with nc1:
     st.page_link(page_hist, label="Historical Data", icon="📅")
 with nc2:
     st.page_link(page_roster, label="Roster", icon="🗓️")
 with nc3:
-    st.page_link(page_emp, label="Employee", icon="👤")
-with nc4:
     st.page_link(page_pair, label="Pairings", icon="📋")
-with nc5:
+with nc4:
     st.page_link(page_ioe, label="IOE Audit", icon="🎓")
-with nc6:
+with nc5:
     st.page_link(page_sync, label="Sync Data", icon="🔄")
-with nc7:
+with nc6:
     st.page_link(page_sett, label="Settings", icon="⚙️")
 
 st.divider()
