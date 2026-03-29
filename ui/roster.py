@@ -125,10 +125,11 @@ def render_roster_tab():
             day_active = days_map.get(day, [])
             weekday = day_date.strftime("%a")
             total_active_block = sum((f.actual_block_minutes or 0) for f in day_active)
+            total_scheduled_block = sum((f.planned_block_minutes or 0) for f in day_active)
             
             label = f"{weekday} {day}"
             if day_active:
-                 label_styled = f"**{label}** — ✈️ {len(day_active)} legs — ⏱️ Block: {fmt_block(total_active_block)}"
+                 label_styled = f"**{label}** — ✈️ {len(day_active)} legs — ⏱️ Actual: {fmt_block(total_active_block)} | Scheduled: {fmt_block(total_scheduled_block)}"
                  with st.expander(label_styled, expanded=False):
                      flight_rows = []
                      for f in day_active:
