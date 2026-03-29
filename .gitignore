@@ -317,6 +317,7 @@ lcp/
 # ignore noc_data.db
 noc_data.db
 noc_data.db-journal
+dumpnoc.db
 
 .DS_Store
 firestore_key.json
