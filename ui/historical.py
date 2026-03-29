@@ -80,6 +80,9 @@ def render_historical_tab():
                         else:
                             st.info(f"STATUS: {detailed_flight.status}")
 
+                    if detailed_flight.has_duplicate_warning:
+                        st.error("⚠️ WARNING: Scraper flagged an ambiguous duplicate for this flight during OOOI parsing.")
+
                     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
                     m_col1.metric("Tail", detailed_flight.tail_number or "N/A")
                     m_col2.metric("Type/Ver", f"{detailed_flight.aircraft_type or '--'} / {detailed_flight.version or '--'}")
@@ -91,16 +94,34 @@ def render_historical_tab():
                         u = utc_dt.strftime('%H:%M') if utc_dt else "--"
                         return f"{l} (L) | {u} (Z)"
                     
-                    def fmt_actual(local_dt):
-                        return local_dt.strftime('%H:%M') if local_dt else "--"
+                    def fmt_actual(local_dt, utc_dt=None):
+                        l = local_dt.strftime('%H:%M') if local_dt else "--"
+                        if utc_dt:
+                            u = utc_dt.strftime('%H:%M') if utc_dt else "--"
+                            return f"{l} (L) | {u} (Z)"
+                        return l
 
                     # Row for Times
                     c_t1, c_t2, c_t3, c_t4 = st.columns(4)
-                    c_t1.metric("Dep Scheduled", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
-                    c_t2.metric("Dep Actual", fmt_actual(detailed_flight.actual_departure))
+                    c_t1.metric("Sch Out", fmt_pair(detailed_flight.scheduled_departure, detailed_flight.scheduled_departure_utc))
+                    c_t2.metric("Act Out", fmt_actual(detailed_flight.actual_out, detailed_flight.actual_out_utc))
                     
-                    c_t3.metric("Arr Scheduled", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
-                    c_t4.metric("Arr Actual", fmt_actual(detailed_flight.actual_arrival))
+                    c_t3.metric("Sch In", fmt_pair(detailed_flight.scheduled_arrival, detailed_flight.scheduled_arrival_utc))
+                    c_t4.metric("Act In", fmt_actual(detailed_flight.actual_in, detailed_flight.actual_in_utc))
+                    
+                    def fmt_block(total_minutes):
+                        if total_minutes is None: return "--"
+                        h = abs(total_minutes) // 60
+                        m = abs(total_minutes) % 60
+                        sign = "-" if total_minutes < 0 else ""
+                        return f"{sign}{h}:{m:02d}"
+
+                    # Row for Off / On and Block
+                    c_o1, c_o2, c_o3, c_o4 = st.columns(4)
+                    c_o1.metric("Act Off", fmt_actual(detailed_flight.actual_off, detailed_flight.actual_off_utc))
+                    c_o2.metric("Act On", fmt_actual(detailed_flight.actual_on, detailed_flight.actual_on_utc))
+                    c_o3.metric("Planned Block", fmt_block(detailed_flight.planned_block_minutes))
+                    c_o4.metric("Actual Block", fmt_block(detailed_flight.actual_block_minutes))
 
                     st.markdown("### 👨‍✈️ Crew")
                     from database import flight_crew_association
@@ -127,54 +148,65 @@ def render_historical_tab():
                     # Flight History
                     history_records = session.query(FlightHistory).filter_by(flight_id=detailed_flight.id).order_by(desc(FlightHistory.timestamp)).all()
                     if history_records:
-                        with st.expander("📜 Flight Change History"):
+                        with st.expander("📜 Flight Change History", expanded=True):
+                            history_rows = []
                             for h in history_records:
-                                st.markdown(f"**Changed detected at:** {h.timestamp.strftime('%Y-%m-%d %H:%M:%S')}")
-                                
-                                # Use description for quick view
-                                st.caption(h.description)
-                                
                                 try:
                                     changes = json.loads(h.changes_json)
+                                    ts_str = h.timestamp.strftime('%m/%d %H:%M')
                                     
-                                    # Handle specialized Crew display separately if present
-                                    if "Crew" in changes:
-                                        crew_change = changes.pop("Crew")
-                                        c_old = crew_change.get("old", [])
-                                        c_new = crew_change.get("new", [])
+                                    for field, vals in changes.items():
+                                        old_val = vals.get("old")
+                                        new_val = vals.get("new")
                                         
-                                        st.write("---")
-                                        st.write("**👨‍✈️ Crew Changed:**")
-                                        h_col1, h_col2 = st.columns(2)
-                                        with h_col1:
-                                            st.caption("Former Crew")
-                                            if c_old:
-                                                st.dataframe(pd.DataFrame(c_old), width='stretch', hide_index=True)
+                                        if field == "Crew":
+                                            if not isinstance(old_val, list): old_val = []
+                                            if not isinstance(new_val, list): new_val = []
+                                            
+                                            old_map = {str(c.get("id")): c for c in old_val if c.get("id")}
+                                            new_map = {str(c.get("id")): c for c in new_val if c.get("id")}
+                                            
+                                            added_ids = set(new_map.keys()) - set(old_map.keys())
+                                            removed_ids = set(old_map.keys()) - set(new_map.keys())
+                                            stayed_ids = set(old_map.keys()) & set(new_map.keys())
+                                            
+                                            diffs = []
+                                            for i in added_ids:
+                                                c = new_map[i]
+                                                diffs.append(f"🟢 Added: {c.get('role','')} {c.get('name','')}")
+                                            for i in removed_ids:
+                                                c = old_map[i]
+                                                diffs.append(f"🔴 Removed: {c.get('role','')} {c.get('name','')}")
+                                            for i in stayed_ids:
+                                                o, n = old_map[i], new_map[i]
+                                                if o.get("role") != n.get("role") or o.get("flags") != n.get("flags"):
+                                                    diffs.append(f"🟡 Updated {n.get('name','')}: {o.get('role','')}->{n.get('role','')} | Flags: '{o.get('flags','')}'->'{n.get('flags','')}'")
+                                            
+                                            if not old_val and new_val:
+                                                to_val = f"Initial Scrape: {len(new_val)} members"
                                             else:
-                                                st.write("None / Initial Scrape")
-                                        with h_col2:
-                                            st.caption("New Crew")
-                                            if c_new:
-                                                st.dataframe(pd.DataFrame(c_new), width='stretch', hide_index=True)
-                                            else:
-                                                st.write("Crew Removed")
-                                    
-                                    # Display other scalar changes
-                                    if changes:
-                                        st.write("**📝 Other Field Changes:**")
-                                        # Convert dict to list of dicts for table
-                                        scalar_diffs = []
-                                        for k, v in changes.items():
-                                            scalar_diffs.append({
-                                                "Field": k,
-                                                "Old Value": v.get("old", "None"),
-                                                "New Value": v.get("new", "None")
+                                                to_val = "\n".join(diffs) if diffs else "No Change in List"
+                                                
+                                            history_rows.append({
+                                                "Time": ts_str,
+                                                "Field": "👨‍✈️ Crew Changed",
+                                                "From": f"{len(old_val)} members",
+                                                "To": to_val
                                             })
-                                        st.table(pd.DataFrame(scalar_diffs))
-                                        
-                                except Exception as e:
-                                    st.error(f"Error parsing history: {e}")
-                                st.divider()
+                                        else:
+                                            history_rows.append({
+                                                "Time": ts_str,
+                                                "Field": field,
+                                                "From": str(old_val) if old_val is not None else "None",
+                                                "To": str(new_val) if new_val is not None else "None"
+                                            })
+                                except:
+                                    continue
+                            
+                            if history_rows:
+                                st.dataframe(pd.DataFrame(history_rows), width="stretch", hide_index=True)
+                            else:
+                                st.info("No detailed history available for this flight.")
 
                     st.markdown("### 📋 Operational Data")
                     c_op1, c_op2, c_op3 = st.columns(3)

@@ -41,6 +41,21 @@ class Flight(Base):
     actual_departure_utc = Column(DateTime, nullable=True)
     actual_arrival_utc = Column(DateTime, nullable=True)
     
+    actual_out_utc = Column(DateTime, nullable=True)
+    actual_off_utc = Column(DateTime, nullable=True)
+    actual_on_utc = Column(DateTime, nullable=True)
+    actual_in_utc = Column(DateTime, nullable=True)
+    
+    # OOOI and Block Times
+    actual_out = Column(DateTime, nullable=True)
+    actual_off = Column(DateTime, nullable=True)
+    actual_on = Column(DateTime, nullable=True)
+    actual_in = Column(DateTime, nullable=True)
+    planned_block_minutes = Column(Integer, nullable=True)
+    actual_block_minutes = Column(Integer, nullable=True)
+    has_duplicate_warning = Column(Integer, default=0)
+
+    
     # New Fields
     sta_raw = Column(String) # Raw STA string e.g. "0042 : 16DEC25"
     tail_number = Column(String, nullable=True)
@@ -65,7 +80,7 @@ class CrewMember(Base):
     __tablename__ = 'crew'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String, index=True)
     employee_id = Column(String, unique=True, nullable=True)
     
     # Relationships
@@ -130,11 +145,58 @@ def get_metadata(session, key, default=None):
     rec = session.query(AppMetadata).get(key)
     return rec.value if rec else default
 
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Table, inspect, text
+
 engine = create_engine(DB_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(engine)
+    
+    # Auto-migration: Check for missing columns in 'flights' table
+    inspector = inspect(engine)
+    columns = [col['name'] for col in inspector.get_columns('flights')]
+    
+    # Define columns that might be missing in older versions
+    # Map column name to its SQLAlchemy type string for ALTER TABLE
+    required_columns = {
+        'scheduled_departure_utc': 'DATETIME',
+        'scheduled_arrival_utc': 'DATETIME',
+        'actual_departure_utc': 'DATETIME',
+        'actual_arrival_utc': 'DATETIME',
+        'actual_out_utc': 'DATETIME',
+        'actual_off_utc': 'DATETIME',
+        'actual_on_utc': 'DATETIME',
+        'actual_in_utc': 'DATETIME',
+        'actual_out': 'DATETIME',
+        'actual_off': 'DATETIME',
+        'actual_on': 'DATETIME',
+        'actual_in': 'DATETIME',
+        'planned_block_minutes': 'INTEGER',
+        'actual_block_minutes': 'INTEGER',
+        'has_duplicate_warning': 'INTEGER DEFAULT 0',
+        'sta_raw': 'VARCHAR',
+        'tail_number': 'VARCHAR',
+        'departure_airport': 'VARCHAR',
+        'arrival_airport': 'VARCHAR',
+        'aircraft_type': 'VARCHAR',
+        'version': 'VARCHAR',
+        'status': 'VARCHAR',
+        'pax_data': 'VARCHAR',
+        'load_data': 'VARCHAR',
+        'notes_data': 'VARCHAR'
+    }
+    
+    with engine.connect() as conn:
+        for col_name, col_type in required_columns.items():
+            if col_name not in columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE flights ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+                    print(f"Migration: Added missing column '{col_name}' to 'flights' table.")
+                except Exception as e:
+                    print(f"Migration Error on '{col_name}': {e}")
+                    
     return engine
 
 def get_session():

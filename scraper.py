@@ -1,7 +1,12 @@
 import os
 import asyncio
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import zoneinfo
+import airportsdata
+
+AIRPORTS_DATA = airportsdata.load('IATA')
+
 
 # Fix for Playwright/asyncio on Windows (especially Python 3.8+)
 if os.name == 'nt':
@@ -23,6 +28,27 @@ class NOCScraper:
         self.browser = None
         self.page = None
         self.session = get_session()
+
+    def _get_utc_time(self, local_dt, airport_str):
+        if not local_dt or not airport_str:
+            return None
+        # Extract IATA code (e.g., "TYS" from "TYS - KTYS - MCGHEE-TYSON")
+        iata = airport_str.split(" - ")[0].strip()
+        entry = AIRPORTS_DATA.get(iata)
+        if not entry:
+            return None
+        tz_name = entry.get('tz')
+        if not tz_name:
+            return None
+        try:
+            tz = zoneinfo.ZoneInfo(tz_name)
+            # local_dt is naive datetime from scraper
+            local_with_tz = local_dt.replace(tzinfo=tz)
+            # Convert to UTC and return as naive datetime
+            return local_with_tz.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception as e:
+            # Silently fail if timezone is not found or invalid
+            return None
 
     def start(self):
         self.playwright = sync_playwright().start()
@@ -178,18 +204,28 @@ class NOCScraper:
     def parse_and_save(self, html_content, date_obj, mode="Local"):
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # We only need Departures (MasterMain_panelUpper)
-        # Avoids duplicate flights that appear in both Departures (today) and Arrivals (tomorrow)
         departure_panel = soup.find("div", id="MasterMain_panelUpper")
-        if departure_panel:
-            list_items = departure_panel.find_all("div", class_="ListItem")
-        else:
-            # Fallback to all list items if panel ID not found
-            list_items = soup.find_all("div", class_="ListItem")
-            
-        print(f"  Parsing {len(list_items)} flights from Departures ({mode})...")
+        arrival_panel = soup.find("div", id="MasterMain_panelLower")
         
-        for item in list_items:
+        list_items_with_type = []
+        if departure_panel:
+            for it in departure_panel.find_all("div", class_="ListItem"):
+                list_items_with_type.append((it, "Departure"))
+        if arrival_panel:
+            for it in arrival_panel.find_all("div", class_="ListItem"):
+                list_items_with_type.append((it, "Arrival"))
+                
+        if not list_items_with_type:
+            # Fallback
+            for it in soup.find_all("div", class_="ListItem"):
+                list_items_with_type.append((it, "Unknown"))
+            
+        print(f"  Parsing {len(list_items_with_type)} flights from Departures and Arrivals ({mode})...")
+        
+        # Track processed flights in this specific session to avoid double-parsing crew (Dep/Arr panels)
+        processed_flights_in_session = set()
+        
+        for item, panel_type in list_items_with_type:
             try:
                 # 1. Flight Number
                 header_table = item.find("div", class_="ItemHeader").find("table")
@@ -232,34 +268,47 @@ class NOCScraper:
                     elif "#4D2B09" in header_style or "RGB(77, 43, 9)" in header_style or "RGB(77,43,9)" in header_style:
                         is_flown_color = True
                 
-                # Parse Times
+                # --- Parse Times Sequentially to handle midnight crossings ---
                 parsed_std = self._parse_time(date_obj, std_str)
-                parsed_atd = self._parse_time(date_obj, atd_str)
                 
-                parsed_sta = None
-                parsed_ata = None
+                def parse_relative(val_str, ref_time, fallback_date):
+                    if not val_str or not val_str.isdigit() or len(val_str) != 4:
+                        return None
+                    h = int(val_str[:2])
+                    m = int(val_str[2:])
+                    # Base it on the reference time's date if available, otherwise fallback_date
+                    base_dt = ref_time if ref_time else fallback_date
+                    res = base_dt.replace(hour=h, minute=m, second=0, microsecond=0)
+                    
+                    # If we have a reference time and the new time is 'earlier' by a lot, 
+                    # it means we crossed midnight.
+                    # Heuristic: if it's > 6 hours 'earlier', it's probably the next day.
+                    if ref_time and res < (ref_time - timedelta(hours=6)):
+                        res += timedelta(days=1)
+                    # Also handle the case where the flight is incredibly long or delayed? 
+                    # Usually ref_time is STD.
+                    return res
+
+                parsed_atd = parse_relative(atd_str, parsed_std, date_obj)
                 
-                # Helper for Arrival Time Parsing
-                def parse_arrival(val_str, base_date):
+                # Helper for Arrival Time Parsing (STA/ATA)
+                def parse_arrival_complex(val_str, ref_time, fallback_date):
                     if not val_str: return None
-                    try:
-                        val_clean = val_str.strip()
-                        if " : " in val_clean:
+                    val_clean = val_str.strip()
+                    if " : " in val_clean:
+                        try:
                             parts = val_clean.split(" : ")
                             if len(parts) == 2:
                                 t_str, d_str = parts
                                 dt_obj = datetime.strptime(d_str, "%d%b%y")
                                 h = int(t_str[:2]); m = int(t_str[2:])
                                 return dt_obj.replace(hour=h, minute=m, second=0, microsecond=0)
-                        elif len(val_clean) == 4 and val_clean.isdigit():
-                            h = int(val_clean[:2]); m = int(val_clean[2:])
-                            return base_date.replace(hour=h, minute=m, second=0, microsecond=0)
-                    except: 
-                        return None
-                    return None
+                        except: pass
+                    
+                    return parse_relative(val_clean, ref_time, fallback_date)
 
-                parsed_sta = parse_arrival(sta_val, date_obj)
-                parsed_ata = parse_arrival(ata_val, date_obj)
+                parsed_sta = parse_arrival_complex(sta_val, parsed_std, date_obj)
+                parsed_ata = parse_arrival_complex(ata_val, parsed_std, date_obj)
 
                 # --- Extract Details Early for Matching ---
                 tail_number = details.get("Registration", ["", None])[0]
@@ -279,16 +328,57 @@ class NOCScraper:
                 elif is_flown_color:
                     status_str = "Flown"
                 
-                # --- DB Interaction ---
-                # IMPORTANT: Use the actual departure date from parsed_std, not the scrape date
-                # This prevents red-eye flights from being duplicated across midnight
-                flight_date = date_obj  # Default to scrape date
-                if parsed_std:
-                    # Use midnight of the departure date as the canonical flight date
+                # --- DB Interaction & OOOI Extraction ---
+                import re
+                flight_date_str = details.get("Date", ["", None])[0]
+                flight_date = date_obj
+                if flight_date_str:
+                    try:
+                        flight_date = datetime.strptime(flight_date_str, "%d%b%y")
+                    except:
+                        if parsed_std: flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
+                elif parsed_std:
                     flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
+
+                actual_out = None
+                actual_off = None
+                actual_on = None
+                actual_in = None
+                
+                if len(header_cells) > 2:
+                    time_raw = header_cells[2].get_text(separator=' ', strip=True)
+                    matches = re.findall(r'\d{4}', time_raw)
+                    if panel_type == "Departure":
+                        if len(matches) > 0: 
+                            actual_out = parse_relative(matches[0], parsed_std, flight_date)
+                        if len(matches) > 1:
+                            actual_off = parse_relative(matches[1], parsed_std, flight_date)
+                    elif panel_type == "Arrival":
+                        if len(matches) > 0: 
+                            # Use parsed_sta as reference if available, otherwise parsed_std
+                            ref = parsed_sta if parsed_sta else parsed_std
+                            actual_on = parse_relative(matches[0], ref, flight_date)
+                        if len(matches) > 1:
+                            ref = parsed_sta if parsed_sta else parsed_std
+                            actual_in = parse_relative(matches[1], ref, flight_date)
+
+                planned_block = None
+                
+                # --- UTC Conversion ---
+                std_utc = self._get_utc_time(parsed_std, dep_apt)
+                atd_utc = self._get_utc_time(parsed_atd, dep_apt)
+                sta_utc = self._get_utc_time(parsed_sta, arr_apt)
+                ata_utc = self._get_utc_time(parsed_ata, arr_apt)
+                
+                out_utc = self._get_utc_time(actual_out, dep_apt)
+                off_utc = self._get_utc_time(actual_off, dep_apt)
+                on_utc = self._get_utc_time(actual_on, arr_apt)
+                in_utc = self._get_utc_time(actual_in, arr_apt)
+
+                if std_utc and sta_utc:
+                    planned_block = int((sta_utc - std_utc).total_seconds() // 60)
                 
                 # Modified Query: Match on Flight # AND Date AND Route (Dep/Arr)
-                # This handles duplicate flight numbers (same day, different legs)
                 query = self.session.query(Flight).filter(
                     Flight.flight_number == flight_number,
                     Flight.date == flight_date
@@ -299,8 +389,13 @@ class NOCScraper:
                         Flight.departure_airport == dep_apt,
                         Flight.arrival_airport == arr_apt
                     )
+                if tail_number:
+                    query = query.filter(Flight.tail_number == tail_number)
                 
-                existing = query.first()
+                matching_flights = query.all()
+                existing = matching_flights[0] if matching_flights else None
+                has_duplicate_warning = 1 if len(matching_flights) > 1 else 0
+                
                 was_new_flight = False
                 
                 if mode == "Local":
@@ -316,6 +411,24 @@ class NOCScraper:
                             scheduled_arrival=parsed_sta,
                             actual_departure=parsed_atd,
                             actual_arrival=parsed_ata,
+                            
+                            scheduled_departure_utc=std_utc,
+                            scheduled_arrival_utc=sta_utc,
+                            actual_departure_utc=atd_utc,
+                            actual_arrival_utc=ata_utc,
+                            
+                            actual_out=actual_out,
+                            actual_off=actual_off,
+                            actual_on=actual_on,
+                            actual_in=actual_in,
+                            
+                            actual_out_utc=out_utc,
+                            actual_off_utc=off_utc,
+                            actual_on_utc=on_utc,
+                            actual_in_utc=in_utc,
+                            
+                            planned_block_minutes=planned_block,
+                            has_duplicate_warning=has_duplicate_warning,
                             departure_airport=dep_apt,
                             arrival_airport=arr_apt,
                             
@@ -333,6 +446,26 @@ class NOCScraper:
                         existing = flight # Now existing is valid for the rest of the flow
                     
                     
+                    # Compute actual block time if both OUT and IN are available now (using UTC for accuracy)
+                    eff_out_utc = out_utc if out_utc else existing.actual_out_utc
+                    eff_in_utc = in_utc if in_utc else existing.actual_in_utc
+                    actual_block = None
+                    if eff_out_utc and eff_in_utc:
+                        actual_block = int((eff_in_utc - eff_out_utc).total_seconds() // 60)
+                        
+                    if not actual_out: actual_out = existing.actual_out
+                    if not actual_off: actual_off = existing.actual_off
+                    if not actual_on: actual_on = existing.actual_on
+                    if not actual_in: actual_in = existing.actual_in
+                    
+                    if not out_utc: out_utc = existing.actual_out_utc
+                    if not off_utc: off_utc = existing.actual_off_utc
+                    if not on_utc: on_utc = existing.actual_on_utc
+                    if not in_utc: in_utc = existing.actual_in_utc
+
+                    if has_duplicate_warning == 1:
+                        existing.has_duplicate_warning = 1
+                    
                     # --- Change Detection Logic ---
                     changes = {}
                     
@@ -343,6 +476,22 @@ class NOCScraper:
                         "Scheduled Arrival": ("scheduled_arrival", parsed_sta),
                         "Actual Departure": ("actual_departure", parsed_atd),
                         "Actual Arrival": ("actual_arrival", parsed_ata),
+                        "Actual Out": ("actual_out", actual_out),
+                        "Actual Off": ("actual_off", actual_off),
+                        "Actual On": ("actual_on", actual_on),
+                        "Actual In": ("actual_in", actual_in),
+                        
+                        "Scheduled Departure Zulu": ("scheduled_departure_utc", std_utc),
+                        "Scheduled Arrival Zulu": ("scheduled_arrival_utc", sta_utc),
+                        "Actual Departure Zulu": ("actual_departure_utc", atd_utc),
+                        "Actual Arrival Zulu": ("actual_arrival_utc", ata_utc),
+                        "Actual Out Zulu": ("actual_out_utc", out_utc),
+                        "Actual Off Zulu": ("actual_off_utc", off_utc),
+                        "Actual On Zulu": ("actual_on_utc", on_utc),
+                        "Actual In Zulu": ("actual_in_utc", in_utc),
+                        
+                        "Planned Block": ("planned_block_minutes", planned_block),
+                        "Actual Block": ("actual_block_minutes", actual_block),
                         "Departure Airport": ("departure_airport", dep_apt),
                         "Arrival Airport": ("arrival_airport", arr_apt),
                         "Aircraft Type": ("aircraft_type", type_val),
@@ -365,10 +514,19 @@ class NOCScraper:
                             # Update the object
                             setattr(existing, attr, new_val)
                     
-                    # 2. Compare Crew
+                    # 2. Compare Crew (Only once per flight number per session to avoid Dep/Arr double-logs)
+                    flight_key = (flight_number, flight_date)
+                    if flight_key in processed_flights_in_session:
+                        # Already processed crew for this flight in this scrape session? Skip history/sync logic.
+                        # (But we still might want to update OOOI if the panel differs, which we do above)
+                        continue
+                    
+                    processed_flights_in_session.add(flight_key)
+                    
                     # Get current DB crew
                     current_crew_list = []
                     from database import flight_crew_association
+                    # Optimization: Query the association table using the current session
                     existing_crew_res = self.session.execute(
                         flight_crew_association.select().where(flight_crew_association.c.flight_id == existing.id)
                     ).fetchall()
@@ -416,15 +574,31 @@ class NOCScraper:
                                 "role": role_code,
                                 "flags": flags
                             })
-                    new_crew_list.sort(key=lambda x: (x['role'] or '', x['name'] or ''))
+                    # Normalize for comparison (more aggressive to avoid false positives)
+                    def normalize_crew(c_list):
+                        normalized = []
+                        for c in c_list:
+                            # Strip '@' parts and normalize case/whitespace
+                            name_clean = str(c.get("name") or "").strip()
+                            if "@" in name_clean: name_clean = name_clean.split("@")[0].strip()
+                            
+                            normalized.append({
+                                "id": str(c.get("id") or "").strip(),
+                                "name": name_clean.lower(), # Case-insensitive comparison
+                                "role": str(c.get("role") or "").strip().upper(), # Roles are usually UC
+                                "flags": str(c.get("flags") or "").strip()
+                            })
+                        # Sort by ALL fields to ensure fixed order
+                        return sorted(normalized, key=lambda x: (x['role'], x['id'], x['name'], x['flags']))
+
+                    current_crew_normalized = normalize_crew(current_crew_list)
+                    new_crew_normalized = normalize_crew(new_crew_list)
                     
                     # Compare Crew Lists
-                    # Simple JSON dump comparison
-                    c_old_json = json.dumps(current_crew_list, sort_keys=True)
-                    c_new_json = json.dumps(new_crew_list, sort_keys=True)
+                    c_old_json = json.dumps(current_crew_normalized, sort_keys=True)
+                    c_new_json = json.dumps(new_crew_normalized, sort_keys=True)
                     
                     if c_old_json != c_new_json:
-                        # If meaningful change (not just empty to empty)
                         if current_crew_list or new_crew_list:
                             changes["Crew"] = {"old": current_crew_list, "new": new_crew_list}
                     
@@ -469,6 +643,10 @@ class NOCScraper:
                             crew = CrewMember(name=name, employee_id=emp_id)
                             self.session.add(crew)
                             self.session.flush()
+                        elif crew.name != name:
+                            # Update the name in DB if it has changed (prevent consistent mismatch)
+                            crew.name = name
+                            self.session.flush()
                         
                         ins = flight_crew_association.insert().values(
                             flight_id=existing.id, 
@@ -477,6 +655,9 @@ class NOCScraper:
                             flags=flags
                         )
                         self.session.execute(ins)
+                    
+                    # Flush the session to ensure the association changes are visible in DB queries (for the next panel)
+                    self.session.flush()
 
                 elif mode == "UTC":
                     # Update ONLY local times
