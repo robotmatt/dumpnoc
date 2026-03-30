@@ -25,9 +25,11 @@ def render_ioe_tab():
     months_set.add(current_month_str)
             
     months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
-    default_idx = months.index(current_month_str) if current_month_str in months else 0
     
-    selected_month_str = st.selectbox("Select Bid Period", months, index=default_idx) if months else None
+    if "ioe_bp_selector" not in st.session_state:
+        st.session_state["ioe_bp_selector"] = current_month_str if current_month_str in months else months[0] if months else None
+        
+    selected_month_str = st.selectbox("Select Bid Period", months, key="ioe_bp_selector") if months else None
     
     assignments = []
     if selected_month_str:
@@ -246,7 +248,7 @@ def _render_audit_content(selected_month_str, assignments):
             leg_date = leg.date
             
             # Link Generation for Flight
-            flight_link = f"<a href='/?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
+            flight_link = f"<a href='/historical?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
             
             candidates = [str(leg.flight_number), f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(

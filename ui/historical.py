@@ -14,9 +14,15 @@ def render_historical_tab():
     with h_col2:
         d_val = st.session_state.get("history_date_default", datetime.today())
         view_date = st.date_input("Select Date", d_val, label_visibility="collapsed")
-        
-    session = get_session()
+    
+    # 2. URL Sync (Deep-linking)
+    query_params = st.query_params
+    url_flight = query_params.get("flight_num", "")
+    if url_flight and st.session_state.get("last_synced_hist_flight") != url_flight:
+        st.session_state["hist_flight_selector"] = url_flight
+        st.session_state["last_synced_hist_flight"] = url_flight
     view_dt = datetime.combine(view_date, datetime.min.time())
+    session = get_session()
     status_rec = session.get(DailySyncStatus, view_dt)
     
     if status_rec:
@@ -37,24 +43,27 @@ def render_historical_tab():
                 if s.startswith("C"): return s[1:]
                 return s
 
-            selected_flight_num = st.session_state.get("last_selected_flight")
-            
-            # Prioritize Query Param for Flight
-            if "history_flight_default" in st.session_state:
-                 selected_flight_num = st.session_state.pop("history_flight_default") # Consume it
-            
             # 1. Detailed View (Now at the top)
             flight_opts = [clean_fn(f) for f in df_flights['flight_number'].tolist()]
-            idx_sel = 0
-            if selected_flight_num:
-                path_target = clean_fn(selected_flight_num)
-                if path_target in flight_opts:
-                    idx_sel = flight_opts.index(path_target)
             
-            selected_flight_val = st.selectbox("Select Flight to View Details", flight_opts, index=idx_sel)
+            # If the current selection in session state isn't in available options (e.g. date changed)
+            # or if it's the first run, initialize/validate the session state key.
+            current_sel = st.session_state.get("hist_flight_selector")
+            if current_sel not in flight_opts:
+                 st.session_state["hist_flight_selector"] = flight_opts[0] if flight_opts else None
+            
+            selected_flight_val = st.selectbox(
+                "Select Flight to View Details", 
+                flight_opts, 
+                key="hist_flight_selector"
+            )
             
             if selected_flight_val:
-                st.session_state["last_selected_flight"] = selected_flight_val
+                st.session_state["last_synced_hist_flight"] = selected_flight_val
+                # Sync to URL
+                if query_params.get("flight_num") != selected_flight_val:
+                    st.query_params.update(date=view_date.strftime("%Y-%m-%d"), flight_num=selected_flight_val)
+                
                 # Query full object
                 session = get_session()
                 candidates = [selected_flight_val, f"C5{selected_flight_val}", f"C{selected_flight_val}"]
@@ -287,7 +296,7 @@ def render_historical_tab():
             
             # Create the link HTML
             display_df['Flight #'] = display_df.apply(
-                lambda r: f"<a href='/?date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
+                lambda r: f"<a href='/historical?date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
                 axis=1
             )
             

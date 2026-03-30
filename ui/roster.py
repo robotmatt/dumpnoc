@@ -6,19 +6,48 @@ from datetime import datetime, date, timedelta
 from database import get_session, Flight, CrewMember, flight_crew_association, IOEAssignment, ScheduledFlight, FlightHistory
 from sqlalchemy import extract, and_, or_, desc
 
+@st.cache_data(ttl=3600)
+def get_all_crew_cached():
+    session = get_session()
+    # Pull only necessary columns for performance
+    crew = session.query(CrewMember.name, CrewMember.employee_id).order_by(CrewMember.name).all()
+    session.close()
+    return [{"name": c.name, "id": c.employee_id, "label": f"{c.name} ({c.employee_id})"} for c in crew]
+
 def render_roster_tab():
     # 1. State / URL Params
     query_params = st.query_params
     
-    # Resolve initial defaults
+    # Resolve initial date defaults
     d_year = int(st.session_state.get("roster_year_default", query_params.get("year", datetime.now().year)))
     d_month = int(st.session_state.get("roster_month_default", query_params.get("month", datetime.now().month)))
-    d_hrid = st.session_state.get("roster_hrid_default", query_params.get("hrId", ""))
+    
+    # 2. Optimized Employee Selector Data
+    crew_list = get_all_crew_cached()
+    
+    # Deep-linking: Initialize selector state from URL if not already set or if URL changed externally
+    url_hrid = query_params.get("hrId", "")
+    if "roster_crew_selector" not in st.session_state or (url_hrid and st.session_state.get("last_synced_hrid") != url_hrid):
+        default_index = 0
+        if url_hrid:
+            for i, c in enumerate(crew_list):
+                if str(c["id"]) == str(url_hrid):
+                    default_index = i
+                    break
+        st.session_state["roster_crew_selector"] = crew_list[default_index] if crew_list else None
+        st.session_state["last_synced_hrid"] = url_hrid
 
-    # 2. UI Layout - Search Header
+    # 3. UI Layout - Search Header
     col_s1, col_s2, col_s3 = st.columns([2, 1, 1])
+    
     with col_s1:
-        search_term = st.text_input("Search Employee (Name or ID)", value=d_hrid, placeholder="e.g. 9740 or Smith")
+        selected_crew_data = st.selectbox(
+            "Select Employee", 
+            crew_list, 
+            key="roster_crew_selector",
+            format_func=lambda x: x["label"]
+        )
+    
     with col_s2:
         curr_year = datetime.now().year
         years = [curr_year - 1, curr_year, curr_year + 1]
@@ -28,39 +57,29 @@ def render_roster_tab():
         selected_month_name = st.selectbox("Month", months, index=d_month - 1)
         selected_month = months.index(selected_month_name) + 1
 
-    if not search_term:
-        st.info("Please search for an employee to view their roster and history.")
+    if not selected_crew_data:
+        st.info("Please select an employee to view their roster and history.")
         return
 
     session = get_session()
+    hrId = selected_crew_data["id"]
     
-    # Search logic: Exact match on ID or partial match on Name
-    crew_members = session.query(CrewMember).filter(
-        or_(
-            CrewMember.employee_id == search_term,
-            CrewMember.name.ilike(f"%{search_term}%")
-        )
-    ).all()
+    # Sync URL parameters (one-way from state to URL)
+    if query_params.get("hrId") != hrId or \
+       query_params.get("year") != str(selected_year) or \
+       query_params.get("month") != str(selected_month):
+        st.query_params.update(year=selected_year, month=selected_month, hrId=hrId)
+        st.session_state["last_synced_hrid"] = hrId
 
-    selected_crew = None
-    if not crew_members:
-        st.warning(f"No employee found matching '{search_term}'")
+    # Fetch actual CrewMember object
+    selected_crew = session.query(CrewMember).filter(CrewMember.employee_id == hrId).first()
+    
+    if not selected_crew:
+        st.error(f"Could not load details for employee ID {hrId}")
         session.close()
         return
-    elif len(crew_members) > 1:
-        st.info(f"Multiple matches found for '{search_term}'. Select one below:")
-        choices = {f"{c.name} ({c.employee_id})": c for c in crew_members}
-        sorted_labels = sorted(choices.keys())
-        choice = st.radio("Select Member", sorted_labels, label_visibility="collapsed")
-        selected_crew = choices[choice]
-    else:
-        selected_crew = crew_members[0]
 
-    hrId = selected_crew.employee_id
     st.subheader(f"Schedule & History: {selected_crew.name} ({hrId})")
-
-    # Sync URL parameters for deep-linking
-    st.query_params.update(year=selected_year, month=selected_month, hrId=hrId)
 
     # --- MAIN TABS ---
     tab_schedule, tab_audit = st.tabs(["📅 Monthly Schedule", "🚫 Removal Audit"])

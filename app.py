@@ -27,15 +27,18 @@ from ui.employee import render_employee_tab
 from ui.roster import render_roster_tab
 from ui.settings import render_settings_tab
 
-page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
+page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", url_path="historical")
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
 page_roster = st.Page(render_roster_tab, title="Roster", icon="🗓️", url_path="roster")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
+# Hidden root redirect to /historical
+page_home = st.Page(lambda: st.switch_page(page_hist), title="Home", default=True)
+
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_roster, page_pair, page_ioe, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_home, page_hist, page_roster, page_pair, page_ioe, page_sync, page_sett], position="hidden")
 
 # --- Top Header & Navigation ---
 # Using custom CSS to inject title into the top area and style the nav
