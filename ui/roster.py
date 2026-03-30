@@ -148,16 +148,6 @@ def render_roster_tab():
             else:
                 st.markdown(f"<span style='color: #666;'>{label} — No active flights</span>", unsafe_allow_html=True)
 
-        if canceled_flights or removed_flights:
-            st.divider()
-            st.subheader("📋 Cancelled or Removed Leg Summary")
-            h_rows = []
-            for f in canceled_flights:
-                h_rows.append({"Date": f.date.strftime("%d%b%y").upper(), "Flight": f.flight_number, "Route": f"{f.departure_airport}-{f.arrival_airport}", "Type": "🔴 CANC", "Schd Blk": fmt_block(f.planned_block_minutes)})
-            for f in removed_flights:
-                h_rows.append({"Date": f.date.strftime("%d%b%y").upper(), "Flight": f.flight_number, "Route": f"{f.departure_airport}-{f.arrival_airport}", "Type": "🟡 REMV", "Schd Blk": fmt_block(f.planned_block_minutes)})
-            st.table(pd.DataFrame(h_rows))
-
     # ==========================================
     # TAB 2: REMOVAL AUDIT (CHRONOLOGICAL)
     # ==========================================
