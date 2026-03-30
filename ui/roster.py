@@ -5,6 +5,8 @@ import calendar
 from datetime import datetime, date, timedelta
 from database import get_session, Flight, CrewMember, flight_crew_association, IOEAssignment, ScheduledFlight, FlightHistory
 from sqlalchemy import extract, and_, or_, desc
+from fpdf import FPDF
+import io
 
 @st.cache_data(ttl=3600)
 def get_all_crew_cached():
@@ -14,8 +16,95 @@ def get_all_crew_cached():
     session.close()
     return [{"name": c.name, "id": c.employee_id, "label": f"{c.name} ({c.employee_id})"} for c in crew]
 
+def generate_roster_pdf(crew_name, employee_id, month_name, year, days_map, num_days, fmt_block):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", 'B', 16)
+    
+    # Header
+    pdf.cell(0, 10, f"Flight Roster: {crew_name} ({employee_id})", ln=True, align='C')
+    pdf.set_font("helvetica", '', 12)
+    pdf.cell(0, 10, f"Period: {month_name} {year}", ln=True, align='C')
+    pdf.ln(5)
+    
+    # Table Header
+    pdf.set_fill_color(200, 220, 255)
+    pdf.set_font("helvetica", 'B', 8)
+    # Adjusted widths to fit 190mm (A4 is 210mm - 20mm margins)
+    cols = [("Day", 18), ("Flight", 18), ("Route", 28), ("Out", 18), ("In", 18), ("Schd Blk", 25), ("Act Blk", 25), ("Tail", 30)]
+    for col_name, width in cols:
+        pdf.cell(width, 10, col_name, 1, 0, 'C', True)
+    pdf.ln()
+    
+    # Data Rows
+    pdf.set_font("helvetica", '', 8)
+    total_act = 0
+    total_sch = 0
+    
+    fill = False
+    for day in range(1, num_days + 1):
+        # Calculate weekday
+        day_date = date(year, list(calendar.month_name).index(month_name), day)
+        weekday = day_date.strftime("%a")
+        day_active = days_map.get(day, [])
+        
+        if not day_active:
+            # Empty day row
+            pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+            pdf.set_text_color(150, 150, 150)
+            pdf.cell(18, 8, f"{weekday} {day}", 1, 0, 'C', True)
+            pdf.cell(172, 8, "No active flights", 1, 1, 'L', True)
+            pdf.set_text_color(0, 0, 0)
+            fill = not fill
+            continue
+            
+        def clean_apt(apt_str):
+            if not apt_str: return "??"
+            return str(apt_str).split(' - ')[0]
+
+        for i, f in enumerate(day_active):
+            pdf.set_fill_color(245, 245, 245) if fill else pdf.set_fill_color(255, 255, 255)
+            
+            day_str = f"{weekday} {day}" if i == 0 else ""
+            f_num = f.flight_number[2:] if f.flight_number.startswith("C5") else f.flight_number
+            
+            pdf.cell(18, 8, day_str, 1, 0, 'C', True)
+            pdf.cell(18, 8, f_num, 1, 0, 'C', True)
+            route_str = f"{clean_apt(f.departure_airport)}-{clean_apt(f.arrival_airport)}"
+            pdf.cell(28, 8, route_str, 1, 0, 'C', True)
+            pdf.cell(18, 8, f.actual_out.strftime("%H:%M") if f.actual_out else "--", 1, 0, 'C', True)
+            pdf.cell(18, 8, f.actual_in.strftime("%H:%M") if f.actual_in else "--", 1, 0, 'C', True)
+            pdf.cell(25, 8, fmt_block(f.planned_block_minutes), 1, 0, 'C', True)
+            pdf.cell(25, 8, fmt_block(f.actual_block_minutes), 1, 0, 'C', True)
+            pdf.cell(30, 8, f.tail_number or "--", 1, 1, 'C', True)
+            
+            total_act += (f.actual_block_minutes or 0)
+            total_sch += (f.planned_block_minutes or 0)
+        
+        fill = not fill
+
+    # Totals Section
+    pdf.ln(5)
+    pdf.set_font("helvetica", 'B', 8)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(118, 5, "", 0, 0)
+    pdf.cell(25, 5, "Total Sch", 0, 0, 'C')
+    pdf.cell(25, 5, "Total Act", 0, 1, 'C')
+    
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", 'B', 10)
+    pdf.cell(118, 10, "MONTHLY SUMMARY", 0, 0, 'R')
+    pdf.cell(25, 10, fmt_block(total_sch), 1, 0, 'C')
+    pdf.cell(25, 10, fmt_block(total_act), 1, 1, 'C')
+    
+    return bytes(pdf.output())
+
 def render_roster_tab():
-    # 1. State / URL Params
+    def fmt_block(mins):
+        if mins is None: return "0:00"
+        h = abs(mins) // 60
+        m = abs(mins) % 60
+        return f"{h}:{m:02d}"
     query_params = st.query_params
     
     # Resolve initial date defaults
@@ -79,31 +168,45 @@ def render_roster_tab():
         session.close()
         return
 
-    st.subheader(f"Schedule & History: {selected_crew.name} ({hrId})")
+    # --- Data Preparation for Schedule & Export ---
+    # Fetch flights CURRENTLY associated with this member in this month
+    current_flights = session.query(Flight).join(flight_crew_association).filter(
+        and_(
+            flight_crew_association.c.crew_id == selected_crew.id,
+            extract('year', Flight.date) == selected_year,
+            extract('month', Flight.date) == selected_month
+        )
+    ).all()
 
-    # --- MAIN TABS ---
+    active_flights = [f for f in current_flights if f.status != "Canceled"]
+    
+    # Group Active by day for both UI and PDF
+    from collections import defaultdict
+    days_map = defaultdict(list)
+    for f in active_flights:
+        days_map[f.date.day].append(f)
+
+    _, num_days = calendar.monthrange(selected_year, selected_month)
+
+    # --- Header with Export Button ---
+    h_col1, h_col2 = st.columns([2.5, 1])
+    h_col1.subheader(f"Schedule & History: {selected_crew.name} ({hrId})")
+    with h_col2:
+        pdf_bytes = generate_roster_pdf(selected_crew.name, hrId, selected_month_name, selected_year, days_map, num_days, fmt_block)
+        st.download_button(
+            label="📄 Export Roster to PDF",
+            data=pdf_bytes,
+            file_name=f"Roster_{hrId}_{selected_month_name}_{selected_year}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+
     tab_schedule, tab_audit = st.tabs(["📅 Monthly Schedule", "🚫 Removal Audit"])
-
-    def fmt_block(mins):
-        if mins is None: return "0:00"
-        h = abs(mins) // 60
-        m = abs(mins) % 60
-        return f"{h}:{m:02d}"
 
     # ==========================================
     # TAB 1: MONTHLY SCHEDULE (ACTIVE & RECENT)
     # ==========================================
     with tab_schedule:
-        # Fetch flights CURRENTLY associated with this member in this month
-        current_flights = session.query(Flight).join(flight_crew_association).filter(
-            and_(
-                flight_crew_association.c.crew_id == selected_crew.id,
-                extract('year', Flight.date) == selected_year,
-                extract('month', Flight.date) == selected_month
-            )
-        ).all()
-
-        active_flights = [f for f in current_flights if f.status != "Canceled"]
         canceled_flights = [f for f in current_flights if f.status == "Canceled"]
 
         # Fetch All Month History for Removal Scanning
@@ -131,14 +234,9 @@ def render_roster_tab():
                             processed_ids.add(f.id)
             except: continue
 
-        # Group Active by day
-        from collections import defaultdict
-        days_map = defaultdict(list)
-        for f in active_flights:
-            days_map[f.date.day].append(f)
+        # (Logic moved to header for export support)
 
         st.divider()
-        _, num_days = calendar.monthrange(selected_year, selected_month)
         for day in range(1, num_days + 1):
             day_date = date(selected_year, selected_month, day)
             day_active = days_map.get(day, [])
