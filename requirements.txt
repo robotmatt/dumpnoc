@@ -10,4 +10,5 @@ google-cloud-firestore
 firebase-admin
 watchdog
 pypdf
-airportsdatafpdf2
+airportsdata
+fpdf2
