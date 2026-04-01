@@ -3,6 +3,7 @@ import streamlit as st
 from config import NOC_USERNAME, NOC_PASSWORD, VERSION, SCRAPE_INTERVAL_HOURS, ENABLE_CLOUD_SYNC
 from database import get_session, get_metadata, set_metadata
 from firestore_lib import set_cloud_sync_enabled
+from tools.backup_db import create_db_backup
 
 def render_settings_tab():
     st.header("⚙️ Settings")
@@ -74,6 +75,21 @@ def render_settings_tab():
         set_metadata(session, "scrape_days", str(new_days))
         session.close()
         st.success(f"Days Updated! Reflected in next background scrape.")
+
+    st.divider()
+    st.subheader("🛠️ Database Management")
+    
+    col_b1, col_b2 = st.columns([1, 1.5])
+    with col_b1:
+        if st.button("🚀 Create Manual Backup", use_container_width=True):
+            backup_file = create_db_backup()
+            if backup_file:
+                st.success(f"Backup created successfully!")
+                st.code(backup_file)
+            else:
+                st.error("Backup failed. Check logs.")
+    with col_b2:
+        st.write("Backups are stored in the `/backups` folder. The system keeps the last 15 days of backups automatically.")
 
     st.divider()
     st.caption(f"NOC Mobile Scraper {VERSION}")

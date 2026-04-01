@@ -154,8 +154,14 @@ class NOCScraper:
             self.page.wait_for_timeout(3000)
             
             content_local = self.page.content()
-            self.parse_and_save(content_local, date_obj, mode="Local")
+            seen_ids = self.parse_and_save(content_local, date_obj, mode="Local")
             
+            # --- Pruning / Reconciliation ---
+            # If the scrape was basically successful, remove anything in the DB for this 
+            # station/date that we DIDN'T see in the current portal view.
+            if seen_ids is not None:
+                self._prune_missing_flights(date_obj, seen_ids)
+
             # Update Sync Status (Only once)
             self._update_sync_status(date_obj)
             return True
@@ -201,6 +207,87 @@ class NOCScraper:
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
+    def _prune_missing_flights(self, date_obj, seen_ids):
+        """
+        Removes flights from the DB that are associated with the current station 
+        for date_obj but were not present in the seen_ids list.
+        """
+        try:
+            date_key = date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
+            
+            # 1. Identify the current station from the page or the flights
+            # Let's try to grab it from the typical Station Name field
+            station_code = None
+            try:
+                # Wide set of potential selectors for Raido/NOC
+                selectors = ["#MasterMain_tbStation_StationNameField", "#MasterMain_tbStation_StationFieldTextBox", "#MasterMain_lbStationName", ".StationHeader"]
+                for sel in selectors:
+                    station_el = self.page.query_selector(sel)
+                    if station_el:
+                        val = station_el.get_attribute("value") or station_el.inner_text()
+                        if val:
+                            station_code = val.split(" - ")[0].strip()
+                            break
+            except:
+                pass
+            
+            # --- Inference Fallback ---
+            # If we couldn't find it in the UI, but we have seen flights, we can infer it!
+            # The station is the airport that appears in EVERY flight of the scrape.
+            if not station_code and seen_ids:
+                from collections import Counter
+                airport_counts = Counter()
+                # Query the objects we just saved to find the common station
+                found_flights = self.session.query(Flight).filter(Flight.id.in_(seen_ids)).all()
+                for f in found_flights:
+                    if f.departure_airport: airport_counts[f.departure_airport.split(" - ")[0].strip()] += 1
+                    if f.arrival_airport: airport_counts[f.arrival_airport.split(" - ")[0].strip()] += 1
+                
+                if airport_counts:
+                    # The most common airport is almost certainly our base station
+                    station_code, count = airport_counts.most_common(1)[0]
+                    # Check if it appears in at least 50% of the flights (safety)
+                    if count < (len(found_flights) // 2):
+                        station_code = None # Ambiguous
+
+            if not station_code:
+                # We skip pruning for safety if we can't identify the station.
+                # If seen_ids is empty AND we can't find station_code, we definitely can't prune.
+                print("  [Prune] Could not detect current station in UI or via inference. Skipping reconciliation for safety.")
+                return
+                print("  [Prune] Could not detect current station. Skipping reconciliation for safety.")
+                return
+
+            print(f"  [Prune] Reconciling flights for station {station_code} on {date_key.date()}...")
+            
+            # 2. Query DB for all flights at this station on this day
+            from sqlalchemy import or_
+            db_flights = self.session.query(Flight).filter(
+                Flight.date == date_key,
+                or_(
+                    Flight.departure_airport.like(f"{station_code}%"),
+                    Flight.arrival_airport.like(f"{station_code}%")
+                )
+            ).all()
+            
+            to_delete = [f for f in db_flights if f.id not in seen_ids]
+            
+            if to_delete:
+                print(f"  [Prune] Found {len(to_delete)} flights in DB no longer present in Ops. Purging...")
+                for f in to_delete:
+                    # Cleanup associations
+                    from database import flight_crew_association
+                    self.session.execute(flight_crew_association.delete().where(flight_crew_association.c.flight_id == f.id))
+                    self.session.delete(f)
+                self.session.commit()
+                print(f"  [Prune] Purged {len(to_delete)} flights.")
+            else:
+                print("  [Prune] Database is already in sync with Ops view.")
+                
+        except Exception as e:
+            print(f"  [Prune] Error during reconciliation: {e}")
+            self.session.rollback()
+
     def parse_and_save(self, html_content, date_obj, mode="Local"):
         soup = BeautifulSoup(html_content, 'html.parser')
         
@@ -224,6 +311,7 @@ class NOCScraper:
         
         # Track processed flights in this specific session to avoid double-parsing crew (Dep/Arr panels)
         processed_flights_in_session = set()
+        seen_ids = []
         
         for item, panel_type in list_items_with_type:
             try:
@@ -234,7 +322,7 @@ class NOCScraper:
                 header_cells = header_table.find_all("td")
                 flight_number = header_cells[0].get_text(strip=True)
                 
-                # 2. Details
+                # 2. Details (Move this up to get metadata before times)
                 details_table = item.find("table", class_="ItemChildTableDetails")
                 if not details_table: continue
                 
@@ -248,7 +336,35 @@ class NOCScraper:
                         val_text = val_cell.get_text(strip=True)
                         details[key] = (val_text, val_cell)
                 
-                # Parse specific fields
+                # --- DETERMINE THE TRUE FLIGHT DATE FIRST ---
+                # Check for "Date" or "Oper Date" or anything containing "Date"
+                flight_date = date_obj
+                found_explicit_date = False
+                for k, v in details.items():
+                    if "DATE" in k.upper():
+                        date_str = v[0]
+                        try:
+                            # Standard format: 07APR26 or 07APR
+                            if len(date_str) > 5:
+                                flight_date = datetime.strptime(date_str, "%d%b%y")
+                            else:
+                                # Infer year
+                                flight_date = datetime.strptime(f"{date_str}{date_obj.year}", "%d%b%Y")
+                            found_explicit_date = True
+                            break
+                        except:
+                            continue
+                
+                # IMPORTANT: If the explicit date doesn't match date_obj, and we aren't 
+                # within a logical +/-1 day window, it might be an error or background item.
+                # However, many portals show 4/8 flights when viewing 4/7.
+                # If it's a departure at 02:00 on 4/8, it shouldn't be in our 4/7 database record.
+                if found_explicit_date and flight_date.date() != date_obj.date():
+                    # For safety, if it's showing up on 07APR but the date is 08APR, it's an 08APR flight.
+                    # This will automatically move it out of the 07APR view in the UI.
+                    pass
+
+                # 3. Parse specific fields using the newly determined flight_date as base
                 std_str = details.get("STD", ["", None])[0] # e.g. "2159"
                 sta_val = details.get("STA", ["", None])[0]
                 atd_str = details.get("ATD", ["", None])[0]
@@ -268,8 +384,8 @@ class NOCScraper:
                     elif "#4D2B09" in header_style or "RGB(77, 43, 9)" in header_style or "RGB(77,43,9)" in header_style:
                         is_flown_color = True
                 
-                # --- Parse Times Sequentially to handle midnight crossings ---
-                parsed_std = self._parse_time(date_obj, std_str)
+                # --- Parse Times Sequentially using flight_date as reference ---
+                parsed_std = self._parse_time(flight_date, std_str)
                 
                 def parse_relative(val_str, ref_time, fallback_date):
                     if not val_str or not val_str.isdigit() or len(val_str) != 4:
@@ -285,11 +401,11 @@ class NOCScraper:
                     # Heuristic: if it's > 6 hours 'earlier', it's probably the next day.
                     if ref_time and res < (ref_time - timedelta(hours=6)):
                         res += timedelta(days=1)
-                    # Also handle the case where the flight is incredibly long or delayed? 
-                    # Usually ref_time is STD.
+                    # Also handle if it's much later (more than 18 hours), might be previous day
+                    # But usually ref is STD and we care about delays going forward.
                     return res
 
-                parsed_atd = parse_relative(atd_str, parsed_std, date_obj)
+                parsed_atd = parse_relative(atd_str, parsed_std, flight_date)
                 
                 # Helper for Arrival Time Parsing (STA/ATA)
                 def parse_arrival_complex(val_str, ref_time, fallback_date):
@@ -300,15 +416,23 @@ class NOCScraper:
                             parts = val_clean.split(" : ")
                             if len(parts) == 2:
                                 t_str, d_str = parts
-                                dt_obj = datetime.strptime(d_str, "%d%b%y")
+                                # Handle partial dates or missing years
+                                try:
+                                    if len(d_str) > 5:
+                                        dt_obj = datetime.strptime(d_str, "%d%b%y")
+                                    else:
+                                        dt_obj = datetime.strptime(f"{d_str}{fallback_date.year}", "%d%b%Y")
+                                except:
+                                    dt_obj = fallback_date
+                                    
                                 h = int(t_str[:2]); m = int(t_str[2:])
                                 return dt_obj.replace(hour=h, minute=m, second=0, microsecond=0)
                         except: pass
                     
                     return parse_relative(val_clean, ref_time, fallback_date)
 
-                parsed_sta = parse_arrival_complex(sta_val, parsed_std, date_obj)
-                parsed_ata = parse_arrival_complex(ata_val, parsed_std, date_obj)
+                parsed_sta = parse_arrival_complex(sta_val, parsed_std, flight_date)
+                parsed_ata = parse_arrival_complex(ata_val, parsed_std, flight_date)
 
                 # --- Extract Details Early for Matching ---
                 tail_number = details.get("Registration", ["", None])[0]
@@ -330,15 +454,7 @@ class NOCScraper:
                 
                 # --- DB Interaction & OOOI Extraction ---
                 import re
-                flight_date_str = details.get("Date", ["", None])[0]
-                flight_date = date_obj
-                if flight_date_str:
-                    try:
-                        flight_date = datetime.strptime(flight_date_str, "%d%b%y")
-                    except:
-                        if parsed_std: flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
-                elif parsed_std:
-                    flight_date = parsed_std.replace(hour=0, minute=0, second=0, microsecond=0)
+                # We already have flight_date computed correctly now at the start of the loop
 
                 actual_out = None
                 actual_off = None
@@ -379,297 +495,213 @@ class NOCScraper:
                     planned_block = int((sta_utc - std_utc).total_seconds() // 60)
                 
                 # Modified Query: Match on Flight # AND Date AND Route (Dep/Arr)
-                query = self.session.query(Flight).filter(
-                    Flight.flight_number == flight_number,
-                    Flight.date == flight_date
-                )
-                
-                if dep_apt and arr_apt:
-                    query = query.filter(
-                        Flight.departure_airport == dep_apt,
-                        Flight.arrival_airport == arr_apt
+                try:
+                    query = self.session.query(Flight).filter(
+                        Flight.flight_number == flight_number,
+                        Flight.date == flight_date
                     )
-                if tail_number:
-                    query = query.filter(Flight.tail_number == tail_number)
-                
-                matching_flights = query.all()
-                existing = matching_flights[0] if matching_flights else None
-                has_duplicate_warning = 1 if len(matching_flights) > 1 else 0
-                
-                was_new_flight = False
-                
-                if mode == "Local":
-                    # Full Parse & Create
                     
-                    if not existing:
-                        was_new_flight = True
-                        flight = Flight(
-                            flight_number=flight_number,
-                            date=flight_date,  # Use flight_date (from departure time), not scrape date
-                            tail_number=tail_number,
-                            scheduled_departure=parsed_std,
-                            scheduled_arrival=parsed_sta,
-                            actual_departure=parsed_atd,
-                            actual_arrival=parsed_ata,
-                            
-                            scheduled_departure_utc=std_utc,
-                            scheduled_arrival_utc=sta_utc,
-                            actual_departure_utc=atd_utc,
-                            actual_arrival_utc=ata_utc,
-                            
-                            actual_out=actual_out,
-                            actual_off=actual_off,
-                            actual_on=actual_on,
-                            actual_in=actual_in,
-                            
-                            actual_out_utc=out_utc,
-                            actual_off_utc=off_utc,
-                            actual_on_utc=on_utc,
-                            actual_in_utc=in_utc,
-                            
-                            planned_block_minutes=planned_block,
-                            has_duplicate_warning=has_duplicate_warning,
-                            departure_airport=dep_apt,
-                            arrival_airport=arr_apt,
-                            
-                            sta_raw=sta_val,
-                            pax_data=pax_val,
-                            load_data=load_val,
-                            notes_data=str(notes_val),
-                            aircraft_type=type_val,
-                            version=ver_val,
-                            status=status_str
+                    # identity: Flight # + Date + Dep + Arr
+                    if dep_apt and arr_apt:
+                        query = query.filter(
+                            Flight.departure_airport == dep_apt,
+                            Flight.arrival_airport == arr_apt
                         )
-                        self.session.add(flight)
-                        self.session.flush()
-                        
-                        existing = flight # Now existing is valid for the rest of the flow
                     
+                    # NOTE: We specifically DO NOT filter by tail_number here.
+                    # If the registration changed (tail swap), we want to MATCH the existing record 
+                    # for this flight number/route and UPDATE its tail number.
                     
-                    # Compute actual block time if both OUT and IN are available now (using UTC for accuracy)
-                    eff_out_utc = out_utc if out_utc else existing.actual_out_utc
-                    eff_in_utc = in_utc if in_utc else existing.actual_in_utc
-                    actual_block = None
-                    if eff_out_utc and eff_in_utc:
-                        actual_block = int((eff_in_utc - eff_out_utc).total_seconds() // 60)
-                        
-                    if not actual_out: actual_out = existing.actual_out
-                    if not actual_off: actual_off = existing.actual_off
-                    if not actual_on: actual_on = existing.actual_on
-                    if not actual_in: actual_in = existing.actual_in
+                    matching_flights = query.all()
+                    existing = matching_flights[0] if matching_flights else None
+                    has_duplicate_warning = 1 if len(matching_flights) > 1 else 0
                     
-                    if not out_utc: out_utc = existing.actual_out_utc
-                    if not off_utc: off_utc = existing.actual_off_utc
-                    if not on_utc: on_utc = existing.actual_on_utc
-                    if not in_utc: in_utc = existing.actual_in_utc
-
-                    if has_duplicate_warning == 1:
-                        existing.has_duplicate_warning = 1
+                    was_new_flight = False
                     
-                    # --- Change Detection Logic ---
-                    changes = {}
-                    
-                    # 1. Compare Scalar Fields
-                    fields_to_check = {
-                        "Tail Number": ("tail_number", tail_number),
-                        "Scheduled Departure": ("scheduled_departure", parsed_std),
-                        "Scheduled Arrival": ("scheduled_arrival", parsed_sta),
-                        "Actual Departure": ("actual_departure", parsed_atd),
-                        "Actual Arrival": ("actual_arrival", parsed_ata),
-                        "Actual Out": ("actual_out", actual_out),
-                        "Actual Off": ("actual_off", actual_off),
-                        "Actual On": ("actual_on", actual_on),
-                        "Actual In": ("actual_in", actual_in),
-                        
-                        "Scheduled Departure Zulu": ("scheduled_departure_utc", std_utc),
-                        "Scheduled Arrival Zulu": ("scheduled_arrival_utc", sta_utc),
-                        "Actual Departure Zulu": ("actual_departure_utc", atd_utc),
-                        "Actual Arrival Zulu": ("actual_arrival_utc", ata_utc),
-                        "Actual Out Zulu": ("actual_out_utc", out_utc),
-                        "Actual Off Zulu": ("actual_off_utc", off_utc),
-                        "Actual On Zulu": ("actual_on_utc", on_utc),
-                        "Actual In Zulu": ("actual_in_utc", in_utc),
-                        
-                        "Planned Block": ("planned_block_minutes", planned_block),
-                        "Actual Block": ("actual_block_minutes", actual_block),
-                        "Departure Airport": ("departure_airport", dep_apt),
-                        "Arrival Airport": ("arrival_airport", arr_apt),
-                        "Aircraft Type": ("aircraft_type", type_val),
-                        "Version": ("version", ver_val),
-                        "Status": ("status", status_str)
-                    }
-                    
-                    for label, (attr, new_val) in fields_to_check.items():
-                        old_val = getattr(existing, attr)
-                        
-                        if old_val != new_val:
-                            # Avoid false positives like None vs ""?
-                            if (old_val is None and new_val == "") or (old_val == "" and new_val is None):
-                                continue
-                                
-                            changes[label] = {
-                                "old": str(old_val) if old_val is not None else None, 
-                                "new": str(new_val) if new_val is not None else None
-                            }
-                            # Update the object
-                            setattr(existing, attr, new_val)
-                    
-                    # 2. Compare Crew (Only once per flight number per session to avoid Dep/Arr double-logs)
-                    flight_key = (flight_number, flight_date)
-                    if flight_key in processed_flights_in_session:
-                        # Already processed crew for this flight in this scrape session? Skip history/sync logic.
-                        # (But we still might want to update OOOI if the panel differs, which we do above)
-                        continue
-                    
-                    processed_flights_in_session.add(flight_key)
-                    
-                    # Get current DB crew
-                    current_crew_list = []
-                    from database import flight_crew_association
-                    # Optimization: Query the association table using the current session
-                    existing_crew_res = self.session.execute(
-                        flight_crew_association.select().where(flight_crew_association.c.flight_id == existing.id)
-                    ).fetchall()
-                    for ec in existing_crew_res:
-                        cm = self.session.query(CrewMember).get(ec.crew_id)
-                        current_crew_list.append({
-                            "id": cm.employee_id if cm else None,
-                            "name": cm.name if cm else "Unknown",
-                            "role": ec.role,
-                            "flags": ec.flags
-                        })
-                    current_crew_list.sort(key=lambda x: (x['role'] or '', x['name'] or ''))
-                    
-                    # Parse New Crew
-                    new_crew_list = []
-                    crew_data = details.get("Crew On Board", [None, None])
-                    if crew_data[1]:
-                        crew_text_lines = crew_data[1].get_text(separator="\n").split("\n")
-                        for line in crew_text_lines:
-                            line = line.strip()
-                            if not line: continue
-                            parts = line.split(" - ", 1)
-                            if len(parts) < 2: continue
-                            role_code = parts[0].strip()
-                            rest = parts[1].strip()
-                            rest_parts = rest.split(" ")
-                            emp_id = rest_parts[0]
-                            rest = rest[len(emp_id)+1:].strip()
-                            
-                            flags = ""
-                            name = rest
-                            paren_start = rest.find("(")
-                            paren_end = rest.find(")")
-                            if paren_start != -1 and paren_end != -1 and paren_end > paren_start:
-                                flags = rest[paren_start+1:paren_end]
-                                name = rest[:paren_start].strip()
-                            
-                            name_parts = name.split(" ")
-                            if name_parts and "@" in name_parts[-1]:
-                                name = " ".join(name_parts[:-1])
-                            
-                            new_crew_list.append({
-                                "id": emp_id,
-                                "name": name,
-                                "role": role_code,
-                                "flags": flags
-                            })
-                    # Normalize for comparison (more aggressive to avoid false positives)
-                    def normalize_crew(c_list):
-                        normalized = []
-                        for c in c_list:
-                            # Strip '@' parts and normalize case/whitespace
-                            name_clean = str(c.get("name") or "").strip()
-                            if "@" in name_clean: name_clean = name_clean.split("@")[0].strip()
-                            
-                            normalized.append({
-                                "id": str(c.get("id") or "").strip(),
-                                "name": name_clean.lower(), # Case-insensitive comparison
-                                "role": str(c.get("role") or "").strip().upper(), # Roles are usually UC
-                                "flags": str(c.get("flags") or "").strip()
-                            })
-                        # Sort by ALL fields to ensure fixed order
-                        return sorted(normalized, key=lambda x: (x['role'], x['id'], x['name'], x['flags']))
-
-                    current_crew_normalized = normalize_crew(current_crew_list)
-                    new_crew_normalized = normalize_crew(new_crew_list)
-                    
-                    # Compare Crew Lists
-                    c_old_json = json.dumps(current_crew_normalized, sort_keys=True)
-                    c_new_json = json.dumps(new_crew_normalized, sort_keys=True)
-                    
-                    if c_old_json != c_new_json:
-                        if current_crew_list or new_crew_list:
-                            changes["Crew"] = {"old": current_crew_list, "new": new_crew_list}
-                    
-                    # --- Save History if Differences Found ---
-                    history_changes = {k: v for k, v in changes.items() if k != "Status"}
-                    if history_changes and not was_new_flight:
-                            # Let's insert the history record
-                            try:
-                                summary_parts = []
-                                for k, v in history_changes.items():
-                                    summary_parts.append(k)
-                                
-                                summary = f"Changed: {', '.join(summary_parts)}"
-                                
-                                from database import FlightHistory
-                                # Check if redundant? No, we trust the diff.
-                                hist = FlightHistory(
-                                    flight_id=existing.id,
-                                    timestamp=datetime.now(),
-                                    changes_json=json.dumps(history_changes),
-                                    description=summary
-                                )
-                                self.session.add(hist)
-                                print(f"  [History] {summary} for {flight_number}")
-                            except Exception as e:
-                                print(f"Error logging history: {e}")
-
-                    # --- Sync Crew to DB ---
-                    # Always overwrite the association with the latest scrape (new_crew_list)
-                    self.session.execute(flight_crew_association.delete().where(
-                        flight_crew_association.c.flight_id == existing.id
-                    ))
-                    
-                    for c_dict in new_crew_list:
-                        emp_id = c_dict["id"]
-                        name = c_dict["name"]
-                        role_code = c_dict["role"]
-                        flags = c_dict["flags"]
-
-                        crew = self.session.query(CrewMember).filter_by(employee_id=emp_id).first()
-                        if not crew:
-                            crew = CrewMember(name=name, employee_id=emp_id)
-                            self.session.add(crew)
+                    if mode == "Local":
+                        # Full Parse & Create
+                        if not existing:
+                            was_new_flight = True
+                            flight = Flight(
+                                flight_number=flight_number,
+                                date=flight_date,
+                                tail_number=tail_number,
+                                scheduled_departure=parsed_std,
+                                scheduled_arrival=parsed_sta,
+                                actual_departure=parsed_atd,
+                                actual_arrival=parsed_ata,
+                                scheduled_departure_utc=std_utc,
+                                scheduled_arrival_utc=sta_utc,
+                                actual_departure_utc=atd_utc,
+                                actual_arrival_utc=ata_utc,
+                                actual_out=actual_out,
+                                actual_off=actual_off,
+                                actual_on=actual_on,
+                                actual_in=actual_in,
+                                actual_out_utc=out_utc,
+                                actual_off_utc=off_utc,
+                                actual_on_utc=on_utc,
+                                actual_in_utc=in_utc,
+                                planned_block_minutes=planned_block,
+                                has_duplicate_warning=has_duplicate_warning,
+                                departure_airport=dep_apt,
+                                arrival_airport=arr_apt,
+                                sta_raw=sta_val,
+                                pax_data=pax_val,
+                                load_data=load_val,
+                                notes_data=str(notes_val),
+                                aircraft_type=type_val,
+                                version=ver_val,
+                                status=status_str
+                            )
+                            self.session.add(flight)
                             self.session.flush()
-                        elif crew.name != name:
-                            # Update the name in DB if it has changed (prevent consistent mismatch)
-                            crew.name = name
-                            self.session.flush()
+                            existing = flight
                         
-                        ins = flight_crew_association.insert().values(
-                            flight_id=existing.id, 
-                            crew_id=crew.id, 
-                            role=role_code,
-                            flags=flags
-                        )
-                        self.session.execute(ins)
-                    
-                    # Flush the session to ensure the association changes are visible in DB queries (for the next panel)
-                    self.session.flush()
+                        eff_out_utc = out_utc if out_utc else existing.actual_out_utc
+                        eff_in_utc = in_utc if in_utc else existing.actual_in_utc
+                        actual_block = None
+                        if eff_out_utc and eff_in_utc:
+                            actual_block = int((eff_in_utc - eff_out_utc).total_seconds() // 60)
+                            
+                        if not actual_out: actual_out = existing.actual_out
+                        if not actual_off: actual_off = existing.actual_off
+                        if not actual_on: actual_on = existing.actual_on
+                        if not actual_in: actual_in = existing.actual_in
+                        if not out_utc: out_utc = existing.actual_out_utc
+                        if not off_utc: off_utc = existing.actual_off_utc
+                        if not on_utc: on_utc = existing.actual_on_utc
+                        if not in_utc: in_utc = existing.actual_in_utc
+                        if has_duplicate_warning == 1: existing.has_duplicate_warning = 1
+                        
+                        changes = {}
+                        fields_to_check = {
+                            "Tail Number": ("tail_number", tail_number),
+                            "Scheduled Departure": ("scheduled_departure", parsed_std),
+                            "Scheduled Arrival": ("scheduled_arrival", parsed_sta),
+                            "Actual Departure": ("actual_departure", parsed_atd),
+                            "Actual Arrival": ("actual_arrival", parsed_ata),
+                            "Actual Out": ("actual_out", actual_out),
+                            "Actual Off": ("actual_off", actual_off),
+                            "Actual On": ("actual_on", actual_on),
+                            "Actual In": ("actual_in", actual_in),
+                            "Scheduled Departure Zulu": ("scheduled_departure_utc", std_utc),
+                            "Scheduled Arrival Zulu": ("scheduled_arrival_utc", sta_utc),
+                            "Actual Departure Zulu": ("actual_departure_utc", atd_utc),
+                            "Actual Arrival Zulu": ("actual_arrival_utc", ata_utc),
+                            "Actual Out Zulu": ("actual_out_utc", out_utc),
+                            "Actual Off Zulu": ("actual_off_utc", off_utc),
+                            "Actual On Zulu": ("actual_on_utc", on_utc),
+                            "Actual In Zulu": ("actual_in_utc", in_utc),
+                            "Planned Block": ("planned_block_minutes", planned_block),
+                            "Actual Block": ("actual_block_minutes", actual_block),
+                            "Departure Airport": ("departure_airport", dep_apt),
+                            "Arrival Airport": ("arrival_airport", arr_apt),
+                            "Aircraft Type": ("aircraft_type", type_val),
+                            "Version": ("version", ver_val),
+                            "Status": ("status", status_str)
+                        }
+                        
+                        for label, (attr, new_val) in fields_to_check.items():
+                            old_val = getattr(existing, attr)
+                            if old_val != new_val:
+                                if (old_val is None and new_val == "") or (old_val == "" and new_val is None): continue
+                                changes[label] = {"old": str(old_val) if old_val is not None else None, "new": str(new_val) if new_val is not None else None}
+                                setattr(existing, attr, new_val)
+                        
+                        flight_key = (flight_number, flight_date)
+                        if existing and existing.id not in seen_ids:
+                             seen_ids.append(existing.id)
+                             
+                        if flight_key not in processed_flights_in_session:
+                            processed_flights_in_session.add(flight_key)
+                            
+                            current_crew_list = []
+                            from database import flight_crew_association
+                            existing_crew_res = self.session.execute(flight_crew_association.select().where(flight_crew_association.c.flight_id == existing.id)).fetchall()
+                            for ec in existing_crew_res:
+                                cm = self.session.query(CrewMember).get(ec.crew_id)
+                                current_crew_list.append({"id": cm.employee_id if cm else None, "name": cm.name if cm else "Unknown", "role": ec.role, "flags": ec.flags})
+                            current_crew_list.sort(key=lambda x: (x['role'] or '', x['name'] or ''))
+                            
+                            new_crew_list = []
+                            crew_data = details.get("Crew On Board", [None, None])
+                            if crew_data[1]:
+                                crew_lines = crew_data[1].get_text(separator="\n").split("\n")
+                                for line in crew_lines:
+                                    line = line.strip()
+                                    if not line: continue
+                                    parts = line.split(" - ", 1)
+                                    if len(parts) < 2: continue
+                                    role_code = parts[0].strip()
+                                    rest = parts[1].strip()
+                                    r_parts = rest.split(" ")
+                                    e_id = r_parts[0]
+                                    rest = rest[len(e_id)+1:].strip()
+                                    flags = ""
+                                    name = rest
+                                    p_start = rest.find("(")
+                                    p_end = rest.find(")")
+                                    if p_start != -1 and p_end != -1 and p_end > p_start:
+                                        flags = rest[p_start+1:p_end]
+                                        name = rest[:p_start].strip()
+                                    n_parts = name.split(" ")
+                                    if n_parts and "@" in n_parts[-1]: name = " ".join(n_parts[:-1])
+                                    new_crew_list.append({"id": e_id, "name": name, "role": role_code, "flags": flags})
+                                    
+                            def normalize_crew(c_list):
+                                normalized = []
+                                for c in c_list:
+                                    n_clean = str(c.get("name") or "").strip()
+                                    if "@" in n_clean: n_clean = n_clean.split("@")[0].strip()
+                                    normalized.append({"id": str(c.get("id") or "").strip(), "name": n_clean.lower(), "role": str(c.get("role") or "").strip().upper(), "flags": str(c.get("flags") or "").strip()})
+                                return sorted(normalized, key=lambda x: (x['role'], x['id'], x['name'], x['flags']))
+                                
+                            if json.dumps(normalize_crew(current_crew_list), sort_keys=True) != json.dumps(normalize_crew(new_crew_list), sort_keys=True):
+                                if current_crew_list or new_crew_list: changes["Crew"] = {"old": current_crew_list, "new": new_crew_list}
+                            
+                            history_changes = {k: v for k, v in changes.items() if k != "Status"}
+                            if history_changes and not was_new_flight:
+                                try:
+                                    summary = f"Changed: {', '.join(history_changes.keys())}"
+                                    from database import FlightHistory
+                                    hist = FlightHistory(flight_id=existing.id, timestamp=datetime.now(), changes_json=json.dumps(history_changes), description=summary)
+                                    self.session.add(hist)
+                                    print(f"  [History] {summary} for {flight_number}")
+                                except Exception as e: print(f"Error logging history: {e}")
+                                
+                            self.session.execute(flight_crew_association.delete().where(flight_crew_association.c.flight_id == existing.id))
+                            for c_dict in new_crew_list:
+                                c_id, c_name, c_role, c_flags = c_dict["id"], c_dict["name"], c_dict["role"], c_dict["flags"]
+                                crew = self.session.query(CrewMember).filter_by(employee_id=c_id).first()
+                                if not crew: crew = self.session.query(CrewMember).filter_by(name=c_name).first()
+                                if not crew:
+                                    crew = CrewMember(name=c_name, employee_id=c_id)
+                                    self.session.add(crew)
+                                    self.session.flush()
+                                elif not crew.employee_id and c_id:
+                                    crew.employee_id = c_id
+                                    self.session.flush()
+                                elif crew.name != c_name:
+                                    crew.name = c_name
+                                    self.session.flush()
+                                self.session.execute(flight_crew_association.insert().values(flight_id=existing.id, crew_id=crew.id, role=c_role, flags=c_flags))
+                            self.session.flush()
 
-                elif mode == "UTC":
-                    # Update ONLY local times
-                    if existing:
+                    elif mode == "UTC" and existing:
                         existing.scheduled_departure_utc = parsed_std
                         existing.scheduled_arrival_utc = parsed_sta
-                        # We could parse actuals here too if available
-                        
+                    
+                    self.session.commit() # Save progress for this specific flight leg
+                    
+                except Exception as e:
+                    print(f"Error during database sync for item: {e}")
+                    self.session.rollback()
             except Exception as e:
-                print(f"Error parsing flight item: {e}")
+                print(f"Error parsing flight item structure: {e}")
                 
         print(f"Data saved to database ({mode}).")
+        return seen_ids
 
     def _parse_time(self, date_obj, time_str):
         if not time_str or len(time_str) != 4: return None

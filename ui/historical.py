@@ -2,9 +2,27 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from database import get_session, Flight, CrewMember, DailySyncStatus, FlightHistory
-from sqlalchemy import desc
+from database import get_session, Flight, CrewMember, DailySyncStatus, FlightHistory, flight_crew_association
+from sqlalchemy import desc, and_
 import json
+
+@st.cache_data(ttl=3600)
+def get_all_crew_cached():
+    session = get_session()
+    # Pull only necessary columns for performance
+    crew = session.query(CrewMember.name, CrewMember.employee_id).order_by(CrewMember.name).all()
+    session.close()
+    return [{"name": c.name, "id": c.employee_id, "label": f"{c.name} ({c.employee_id})"} for c in crew]
+
+@st.cache_data(ttl=3600)
+def get_airports_cached():
+    session = get_session()
+    deps = session.query(Flight.departure_airport).filter(Flight.departure_airport != None).distinct().all()
+    arrs = session.query(Flight.arrival_airport).filter(Flight.arrival_airport != None).distinct().all()
+    session.close()
+    
+    all_apts = sorted(list(set([a[0] for a in deps] + [a[0] for a in arrs])))
+    return all_apts
 
 def render_historical_tab():
     # Header layout with Date Picker
@@ -133,7 +151,6 @@ def render_historical_tab():
                     c_o4.metric("Actual Block", fmt_block(detailed_flight.actual_block_minutes))
 
                     st.markdown("### 👨‍✈️ Crew")
-                    from database import flight_crew_association
                     stmt = flight_crew_association.select().where(flight_crew_association.c.flight_id == detailed_flight.id)
                     assoc_rows = session.execute(stmt).fetchall()
                     
@@ -243,7 +260,76 @@ def render_historical_tab():
             m1.metric("Flights Scheduled", num_scheduled)
             m2.metric("Flights Flown", num_flown)
             m3.metric("Flights Canceled", num_canceled)
+
+            st.markdown("#### 🔍 Filters")
+            f_col1, f_col2, f_col3 = st.columns(3)
             
+            all_crew = get_all_crew_cached()
+            all_apts = get_airports_cached()
+            
+            with f_col1:
+                filter_person = st.multiselect(
+                    "Filter by Person", 
+                    options=all_crew,
+                    format_func=lambda x: x["label"],
+                    key="hist_filter_person"
+                )
+            with f_col2:
+                filter_dep = st.multiselect("Departure Airport", options=all_apts, key="hist_filter_dep")
+            with f_col3:
+                filter_arr = st.multiselect("Destination Airport", options=all_apts, key="hist_filter_arr")
+
+            # FETCH CREW DATA IN BULK (Performance Boost)
+            session = get_session()
+            f_ids = df_flights['id'].tolist()
+            
+            # Efficiently fetch all crew for these flights in ONE query
+            crew_stmt = session.query(
+                flight_crew_association.c.flight_id,
+                CrewMember.name,
+                CrewMember.employee_id,
+                flight_crew_association.c.role
+            ).join(CrewMember, flight_crew_association.c.crew_id == CrewMember.id)\
+             .filter(flight_crew_association.c.flight_id.in_(f_ids))
+            
+            all_assoc = crew_stmt.all()
+            session.close()
+
+            # Map crew to flights for filtering and display
+            from collections import defaultdict
+            flight_to_crew = defaultdict(list)
+            flight_to_ca = {}
+            flight_to_fo = {}
+            
+            for f_id, c_name, c_emp_id, c_role in all_assoc:
+                flight_to_crew[f_id].append(str(c_emp_id))
+                role = (c_role or "").upper()
+                if "CAPTAIN" in role or "CA" == role:
+                    flight_to_ca[f_id] = c_name
+                elif "FIRST OFFICER" in role or "FO" in role:
+                    flight_to_fo[f_id] = c_name
+
+            # --- Apply Filters to DataFrame ---
+            mask = pd.Series([True] * len(df_flights))
+            
+            if filter_person:
+                target_ids = [str(p["id"]) for p in filter_person]
+                mask &= df_flights['id'].apply(lambda x: any(tid in flight_to_crew[x] for tid in target_ids))
+            
+            if filter_dep:
+                mask &= df_flights['departure_airport'].isin(filter_dep)
+                
+            if filter_arr:
+                mask &= df_flights['arrival_airport'].isin(filter_arr)
+                
+            filtered_df = df_flights[mask].copy()
+
+            if filtered_df.empty:
+                st.warning("No flights match the selected filters.")
+                # We still want to show the sorting UI if they want to change it? 
+                # Actually, if empty, just stop here.
+                return
+
             # Sorting for Schedule
             col_sort1, col_sort2 = st.columns([2, 1])
             with col_sort1:
@@ -258,31 +344,10 @@ def render_historical_tab():
                 "Tail": "tail_number"
             }
             
-            # Fetch CA and FO for each flight
-            ca_list = []
-            fo_list = []
+            ca_list = [flight_to_ca.get(f_id, "N/A") for f_id in filtered_df['id']]
+            fo_list = [flight_to_fo.get(f_id, "N/A") for f_id in filtered_df['id']]
             
-            from database import flight_crew_association
-            session = get_session()
-            for idx, row in df_flights.iterrows():
-                f_id = row['id']
-                stmt = flight_crew_association.select().where(flight_crew_association.c.flight_id == f_id)
-                assoc_rows = session.execute(stmt).fetchall()
-                
-                ca = "N/A"
-                fo = "N/A"
-                for r in assoc_rows:
-                    cm = session.get(CrewMember, r.crew_id)
-                    role = (r.role or "").upper()
-                    if "CAPTAIN" in role or "CA" == role:
-                        ca = cm.name
-                    elif "FIRST OFFICER" in role or "FO" in role:
-                        fo = cm.name
-                ca_list.append(ca)
-                fo_list.append(fo)
-            session.close()
-            
-            display_df = df_flights[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status']].copy()
+            display_df = filtered_df[['flight_number', 'scheduled_departure', 'departure_airport', 'arrival_airport', 'tail_number', 'status', 'id']].copy()
             display_df['CA'] = ca_list
             display_df['FO'] = fo_list
             display_df['flight_num_clean'] = display_df['flight_number'].apply(clean_fn).astype(int, errors='ignore')

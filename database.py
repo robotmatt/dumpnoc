@@ -197,6 +197,21 @@ def init_db():
                 except Exception as e:
                     print(f"Migration Error on '{col_name}': {e}")
                     
+        # Migration: Ensure 'crew.name' is not unique (it might have been in older versions)
+        try:
+            res = conn.execute(text("PRAGMA index_list('crew')"))
+            for row in res:
+                # row[1] is name, row[2] is unique
+                if row[1] == 'ix_crew_name' and row[2] == 1:
+                    print("Migration: Non-uniquifying crew.name index...")
+                    # SQLAlchemy might have created it as unique index
+                    conn.execute(text("DROP INDEX ix_crew_name"))
+                    conn.execute(text("CREATE INDEX ix_crew_name ON crew(name)"))
+                    conn.commit()
+                    print("Migration: crew.name is no longer unique.")
+        except Exception as e:
+            print(f"Migration Error on crew name constraint: {e}")
+            
     return engine
 
 def get_session():

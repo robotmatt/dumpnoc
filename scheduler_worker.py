@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from database import get_session, get_metadata, set_metadata
 from scraper import NOCScraper
 from config import SCRAPE_INTERVAL_HOURS, SCRAPE_DAYS, NOC_USERNAME, NOC_PASSWORD
+from tools.backup_db import create_db_backup
 
 def background_worker():
     """
@@ -43,6 +44,10 @@ def background_worker():
                 print(f"[Background Scheduler] Next run calculated for: {next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 if NOC_USERNAME and NOC_PASSWORD:
+                    # 1. Create a safety backup before any sync
+                    print("[Background Scheduler] Creating safety backup...")
+                    create_db_backup()
+                    
                     scraper = NOCScraper(headless=True)
                     try:
                         scraper.start()
