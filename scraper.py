@@ -258,7 +258,7 @@ class NOCScraper:
                 print("  [Prune] Could not detect current station. Skipping reconciliation for safety.")
                 return
 
-            print(f"  [Prune] Reconciling flights for station {station_code} on {date_key.date()}...")
+            print(f"  [Prune] Reconciling flights on {date_key.date()}...")
             
             # 2. Query DB for all flights at this station on this day
             from sqlalchemy import or_
@@ -270,7 +270,7 @@ class NOCScraper:
                 )
             ).all()
             
-            to_delete = [f for f in db_flights if f.id not in seen_ids]
+            to_delete = [f for f in db_flights if f.id not in seen_ids and f.status not in ("Canceled", "Flown")]
             
             if to_delete:
                 print(f"  [Prune] Found {len(to_delete)} flights in DB no longer present in Ops. Purging...")
