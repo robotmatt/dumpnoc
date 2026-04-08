@@ -207,6 +207,42 @@ class NOCScraper:
         except Exception as e:
             print(f"Error updating sync status: {e}")
 
+    def _get_or_create_crew(self, c_id, c_name):
+        if not hasattr(self, '_crew_cache_by_id'):
+            self._crew_cache_by_id = {}
+            self._crew_cache_by_name = {}
+            
+            # Pre-load cache for massive speedup
+            all_crew = self.session.query(CrewMember).all()
+            for c in all_crew:
+                if c.employee_id: self._crew_cache_by_id[c.employee_id] = c
+                if c.name: self._crew_cache_by_name[c.name] = c
+                
+        crew = None
+        if c_id and c_id in self._crew_cache_by_id:
+            crew = self._crew_cache_by_id[c_id]
+        elif c_name and c_name in self._crew_cache_by_name:
+            crew = self._crew_cache_by_name[c_name]
+            
+        if not crew:
+            crew = CrewMember(name=c_name, employee_id=c_id)
+            self.session.add(crew)
+            self.session.flush()
+        else:
+            changed = False
+            if not crew.employee_id and c_id:
+                crew.employee_id = c_id
+                changed = True
+            elif crew.name != c_name:
+                crew.name = c_name
+                changed = True
+            if changed:
+                self.session.flush()
+                
+        if c_id: self._crew_cache_by_id[c_id] = crew
+        if c_name: self._crew_cache_by_name[c_name] = crew
+        return crew
+
     def _prune_missing_flights(self, date_obj, seen_ids):
         """
         Removes flights from the DB that are associated with the current station 
@@ -680,18 +716,7 @@ class NOCScraper:
                             self.session.execute(flight_crew_association.delete().where(flight_crew_association.c.flight_id == existing.id))
                             for c_dict in new_crew_list:
                                 c_id, c_name, c_role, c_flags = c_dict["id"], c_dict["name"], c_dict["role"], c_dict["flags"]
-                                crew = self.session.query(CrewMember).filter_by(employee_id=c_id).first()
-                                if not crew: crew = self.session.query(CrewMember).filter_by(name=c_name).first()
-                                if not crew:
-                                    crew = CrewMember(name=c_name, employee_id=c_id)
-                                    self.session.add(crew)
-                                    self.session.flush()
-                                elif not crew.employee_id and c_id:
-                                    crew.employee_id = c_id
-                                    self.session.flush()
-                                elif crew.name != c_name:
-                                    crew.name = c_name
-                                    self.session.flush()
+                                crew = self._get_or_create_crew(c_id, c_name)
                                 self.session.execute(flight_crew_association.insert().values(flight_id=existing.id, crew_id=crew.id, role=c_role, flags=c_flags))
                             self.session.flush()
 

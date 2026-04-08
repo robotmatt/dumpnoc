@@ -27,7 +27,7 @@ class Flight(Base):
 
     id = Column(Integer, primary_key=True)
     flight_number = Column(String, index=True) # e.g. "FL123"
-    date = Column(DateTime) # Date of the flight
+    date = Column(DateTime, index=True) # Date of the flight
     
     # Times (Local -Default)
     scheduled_departure = Column(DateTime)
@@ -58,9 +58,9 @@ class Flight(Base):
     
     # New Fields
     sta_raw = Column(String) # Raw STA string e.g. "0042 : 16DEC25"
-    tail_number = Column(String, nullable=True)
-    departure_airport = Column(String, nullable=True)
-    arrival_airport = Column(String, nullable=True)
+    tail_number = Column(String, nullable=True, index=True)
+    departure_airport = Column(String, nullable=True, index=True)
+    arrival_airport = Column(String, nullable=True, index=True)
     aircraft_type = Column(String, nullable=True)
     version = Column(String, nullable=True)
     status = Column(String, nullable=True)
@@ -211,6 +211,17 @@ def init_db():
                     print("Migration: crew.name is no longer unique.")
         except Exception as e:
             print(f"Migration Error on crew name constraint: {e}")
+            
+        # Add performance indexes
+        try:
+            # We wrap in try to avoid errors if they already exist
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_date ON flights(date)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_dep ON flights(departure_airport)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_arr ON flights(arrival_airport)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_tail ON flights(tail_number)"))
+            conn.commit()
+        except Exception as e:
+            pass
             
     return engine
 
