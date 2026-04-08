@@ -251,7 +251,7 @@ def render_roster_tab():
                      flight_rows = []
                      for f in day_active:
                          f_num = f.flight_number[2:] if f.flight_number.startswith("C5") else f.flight_number
-                         f_link = f"<a href='/?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
+                         f_link = f"<a href='/historical?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
                          flight_rows.append({
                              "Flight": f_link,
                              "Route": f"{f.departure_airport or '??'}-{f.arrival_airport or '??'}",
