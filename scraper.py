@@ -234,16 +234,19 @@ class NOCScraper:
             # --- Inference Fallback ---
             # If we couldn't find it in the UI, but we have seen flights, we can infer it!
             # The station is the airport that appears in EVERY flight of the scrape.
-            if not station_code and seen_ids:
+            seen_flight_numbers = []
+            if seen_ids:
                 from collections import Counter
                 airport_counts = Counter()
                 # Query the objects we just saved to find the common station
                 found_flights = self.session.query(Flight).filter(Flight.id.in_(seen_ids)).all()
                 for f in found_flights:
+                    if f.flight_number and f.flight_number not in seen_flight_numbers:
+                        seen_flight_numbers.append(f.flight_number)
                     if f.departure_airport: airport_counts[f.departure_airport.split(" - ")[0].strip()] += 1
                     if f.arrival_airport: airport_counts[f.arrival_airport.split(" - ")[0].strip()] += 1
                 
-                if airport_counts:
+                if not station_code and airport_counts:
                     # The most common airport is almost certainly our base station
                     station_code, count = airport_counts.most_common(1)[0]
                     # Check if it appears in at least 50% of the flights (safety)
@@ -255,18 +258,18 @@ class NOCScraper:
                 # If seen_ids is empty AND we can't find station_code, we definitely can't prune.
                 print("  [Prune] Could not detect current station in UI or via inference. Skipping reconciliation for safety.")
                 return
-                print("  [Prune] Could not detect current station. Skipping reconciliation for safety.")
-                return
 
             print(f"  [Prune] Reconciling flights on {date_key.date()}...")
             
-            # 2. Query DB for all flights at this station on this day
+            # 2. Query DB for all flights at this station on this day, 
+            # PLUS any flight that shares a flight number with one we just saw.
             from sqlalchemy import or_
             db_flights = self.session.query(Flight).filter(
                 Flight.date == date_key,
                 or_(
                     Flight.departure_airport.like(f"{station_code}%"),
-                    Flight.arrival_airport.like(f"{station_code}%")
+                    Flight.arrival_airport.like(f"{station_code}%"),
+                    Flight.flight_number.in_(seen_flight_numbers) if seen_flight_numbers else False
                 )
             ).all()
             
@@ -275,6 +278,10 @@ class NOCScraper:
             if to_delete:
                 print(f"  [Prune] Found {len(to_delete)} flights in DB no longer present in Ops. Purging...")
                 for f in to_delete:
+                    dep = f.departure_airport.split(" - ")[0] if f.departure_airport else "Unknown"
+                    arr = f.arrival_airport.split(" - ")[0] if f.arrival_airport else "Unknown"
+                    print(f"    -> Pruning {f.flight_number}: {dep} to {arr} (DB ID: {f.id})")
+                    
                     # Cleanup associations
                     from database import flight_crew_association
                     self.session.execute(flight_crew_association.delete().where(flight_crew_association.c.flight_id == f.id))

@@ -25,4 +25,4 @@ SCRAPE_INTERVAL_HOURS = int(os.getenv('SCRAPE_INTERVAL_HOURS', '1'))
 SCRAPE_DAYS = int(os.getenv('SCRAPE_DAYS', '1'))
 
 # App Version Number
-VERSION = 'v1.4'
+VERSION = 'v1.4'
