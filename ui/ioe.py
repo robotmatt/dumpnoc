@@ -82,6 +82,11 @@ def _render_lcp_section(selected_month_str):
     now = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     query_start = max(start_dt, now)
 
+    # Filter selector
+    st.markdown("#### 🔍 Filter LCPs")
+    all_lcp_names = sorted(list(set(lcp_ids.values())))
+    ignore_lcps = st.multiselect("Ignore these LCPs", options=all_lcp_names, help="Exclude specific pilots from the available trips list.")
+
     # 1. Get Flights with LCPs
     flights = session.query(Flight).join(
         flight_crew_association, Flight.id == flight_crew_association.c.flight_id
@@ -134,6 +139,9 @@ def _render_lcp_section(selected_month_str):
         lcp_on_board = []
         for c in f.crew_members:
             if c.employee_id in lcp_ids:
+                lcp_name = lcp_ids[c.employee_id] or c.name
+                if lcp_name in ignore_lcps:
+                    continue
                 lcp_on_board.append(f"{c.name} ({lcp_ids[c.employee_id]})" if lcp_ids[c.employee_id] else c.name)
                 
         if not lcp_on_board: continue 

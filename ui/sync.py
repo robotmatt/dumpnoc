@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime, timedelta
-from database import get_session, get_metadata, DailySyncStatus
+from database import get_session, get_metadata, set_metadata, DailySyncStatus
 from scraper import NOCScraper
 from config import NOC_USERNAME, NOC_PASSWORD
 from firestore_lib import is_cloud_sync_enabled
@@ -62,7 +62,6 @@ def render_sync_tab():
         status_area = st.empty()
         
         # --- Check for global lock ---
-        from database import get_metadata, set_metadata
         session = get_session()
         is_active = get_metadata(session, "is_scrape_in_progress")
         session.close()
