@@ -75,7 +75,7 @@ def create_patch_backup(db_path, full_backup_path, backup_dir, timestamp):
     print(f"Differential backup complete. Changed {changed_count} pages (~{changed_count*CHUNK_SIZE/1024:.1f} KB raw diff).")
     return patch_path
 
-def create_db_backup(db_path='noc_data.db', backup_dir='backups'):
+def create_db_backup(db_path='db/noc_data.db', backup_dir='backups'):
     """
     Creates a backup of the database. 
     Uses full backups once a day and differential patches in between.
@@ -135,4 +135,13 @@ def create_db_backup(db_path='noc_data.db', backup_dir='backups'):
         return None
 
 if __name__ == "__main__":
-    create_db_backup()
+    # Attempt to use path from config if it exists
+    try:
+        import sys
+        import os
+        # Add parent dir to path to import config
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from config import DB_NAME
+        create_db_backup(db_path=DB_NAME)
+    except:
+        create_db_backup()

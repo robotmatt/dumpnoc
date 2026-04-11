@@ -9,7 +9,9 @@ LOGIN_URL = f'{BASE_URL}/Default.aspx'
 STATION_OPS_URL = f'{BASE_URL}/Dialogues/Operations/StationOperations.aspx'
 
 # Database
-DB_NAME = 'noc_data.db'
+DB_NAME = 'db/noc_data.db'
+if not os.path.exists('db'):
+    os.makedirs('db')
 DB_URL = os.getenv('DATABASE_URL', f'sqlite:///{DB_NAME}')
 
 # Env Vars
