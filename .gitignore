@@ -318,6 +318,8 @@ backups/
 # ignore noc_data.db
 noc_data.db
 noc_data.db-journal
+noc_data.db-shm
+noc_data.db-wal
 dumpnoc.db
 
 .DS_Store
@@ -327,3 +329,4 @@ firestore_key.json
 *.db.bak
 debug_log.txt
 tools/jsp_flights_report.txt
+
