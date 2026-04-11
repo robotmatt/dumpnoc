@@ -266,13 +266,18 @@ def _render_audit_content(selected_month_str, assignments):
 
             if actual:
                 caps = []
+                
+                # Fetch all assoc for this flight at once
+                assocs = session.execute(
+                    flight_crew_association.select().where(
+                        flight_crew_association.c.flight_id == actual.id
+                    )
+                ).fetchall()
+                assoc_map = {a.crew_id: a for a in assocs}
+
                 for cm in actual.crew_members:
-                    assoc = session.execute(
-                        flight_crew_association.select().where(
-                            (flight_crew_association.c.flight_id == actual.id) &
-                            (flight_crew_association.c.crew_id == cm.id)
-                        )
-                    ).fetchone()
+                    assoc = assoc_map.get(cm.id)
+                    if not assoc: continue
                     
                     role = assoc.role or ""
                     if role and "FA" in role.upper():
@@ -435,24 +440,44 @@ def _render_audit_content(selected_month_str, assignments):
         month_start = datetime.combine(bp_start, datetime.min.time())
         month_end = datetime.combine(bp_end + timedelta(days=1), datetime.min.time())
         
-        # Get all flights in this month
         flights_in_month = session.query(Flight).filter(
             Flight.date >= month_start,
             Flight.date < month_end
         ).all()
         
+        # BULK PRE-FETCH FOR PERFORMANCE
+        flight_ids = [f.id for f in flights_in_month]
+        
+        # Pre-fetch all Crew Associations
+        assoc_rows = session.execute(
+            flight_crew_association.select().where(
+                flight_crew_association.c.flight_id.in_(flight_ids)
+            )
+        ).fetchall()
+        assoc_by_flight = {}
+        for r in assoc_rows:
+            assoc_by_flight.setdefault(r.flight_id, []).append(r)
+            
+        # Pre-fetch all ScheduledFlights for the month
+        sf_in_month = session.query(ScheduledFlight).filter(
+            ScheduledFlight.date >= month_start,
+            ScheduledFlight.date < month_end
+        ).all()
+        sf_by_flight_date = {}
+        for sf in sf_in_month:
+            key = (sf.flight_number, sf.date)
+            sf_by_flight_date.setdefault(key, []).append(sf)
+        
         unscheduled_ioe = []
         
         for flight in flights_in_month:
+            
+            flight_assocs = assoc_by_flight.get(flight.id, [])
+            
             # Check each crew member for IOE flag
             for crew in flight.crew_members:
-                # Get association to check flags
-                assoc = session.execute(
-                    flight_crew_association.select().where(
-                        (flight_crew_association.c.flight_id == flight.id) &
-                        (flight_crew_association.c.crew_id == crew.id)
-                    )
-                ).fetchone()
+                
+                assoc = next((a for a in flight_assocs if a.crew_id == crew.id), None)
                 
                 if assoc and "IOE" in (assoc.flags or ""):
                     # This crew member has IOE flag
@@ -466,10 +491,9 @@ def _render_audit_content(selected_month_str, assignments):
                         flight_num_clean = flight_num_clean[2:]
                     elif flight_num_clean.startswith('C'):
                         flight_num_clean = flight_num_clean[1:]
-                    all_candidates = session.query(ScheduledFlight).filter(
-                        ScheduledFlight.flight_number == flight_num_clean,
-                        ScheduledFlight.date == flight.date
-                    ).all()
+                    
+                    sf_key = (flight_num_clean, flight.date)
+                    all_candidates = sf_by_flight_date.get(sf_key, [])
                     
                     # If any candidate started in a previous bid period, consider it a carry-over and skip
                     if any(s.pairing_start_date and s.pairing_start_date < month_start for s in all_candidates):
@@ -543,6 +567,29 @@ def _render_audit_content(selected_month_str, assignments):
             Flight.date < month_end
         ).all()
         
+        # BULK PRE-FETCH FOR PERFORMANCE
+        flight_ids = [f.id for f in flights_in_month]
+        
+        # Pre-fetch all Crew Associations
+        assoc_rows = session.execute(
+            flight_crew_association.select().where(
+                flight_crew_association.c.flight_id.in_(flight_ids)
+            )
+        ).fetchall()
+        assoc_by_flight = {}
+        for r in assoc_rows:
+            assoc_by_flight.setdefault(r.flight_id, []).append(r)
+            
+        # Pre-fetch all ScheduledFlights for the month
+        sf_in_month = session.query(ScheduledFlight).filter(
+            ScheduledFlight.date >= month_start,
+            ScheduledFlight.date < month_end
+        ).all()
+        sf_by_flight_date = {}
+        for sf in sf_in_month:
+            key = (sf.flight_number, sf.date)
+            sf_by_flight_date.setdefault(key, []).append(sf)
+        
         # Track pairings with IOE flags
         pairing_stats = {}  # pairing_num -> {total_legs, ioe_legs, dates}
         
@@ -553,10 +600,9 @@ def _render_audit_content(selected_month_str, assignments):
                 flight_num_clean = flight_num_clean[2:]
             elif flight_num_clean.startswith('C'):
                 flight_num_clean = flight_num_clean[1:]
-            all_candidates = session.query(ScheduledFlight).filter(
-                ScheduledFlight.flight_number == flight_num_clean,
-                ScheduledFlight.date == flight.date
-            ).all()
+            
+            sf_key = (flight_num_clean, flight.date)
+            all_candidates = sf_by_flight_date.get(sf_key, [])
             
             # If any candidate started in a previous bid period, consider it a carry-over and skip
             if any(s.pairing_start_date and s.pairing_start_date < month_start for s in all_candidates):
@@ -595,13 +641,10 @@ def _render_audit_content(selected_month_str, assignments):
             
             # Check if this flight has IOE flags (non-FA)
             has_ioe = False
+            flight_assocs = assoc_by_flight.get(flight.id, [])
             for crew in flight.crew_members:
-                assoc = session.execute(
-                    flight_crew_association.select().where(
-                        (flight_crew_association.c.flight_id == flight.id) &
-                        (flight_crew_association.c.crew_id == crew.id)
-                    )
-                ).fetchone()
+                assoc = next((a for a in flight_assocs if a.crew_id == crew.id), None)
+
                 
                 if assoc and "IOE" in (assoc.flags or ""):
                     if not (assoc.role and "FA" in assoc.role.upper()):

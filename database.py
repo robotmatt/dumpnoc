@@ -145,9 +145,17 @@ def get_metadata(session, key, default=None):
     rec = session.query(AppMetadata).get(key)
     return rec.value if rec else default
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Table, inspect, text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Table, inspect, text, event
 
-engine = create_engine(DB_URL)
+engine = create_engine(DB_URL, connect_args={'timeout': 15})
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
