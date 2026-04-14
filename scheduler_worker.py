@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from database import get_session, get_metadata, set_metadata
 from scraper import NOCScraper
 from config import SCRAPE_INTERVAL_HOURS, SCRAPE_DAYS, NOC_USERNAME, NOC_PASSWORD
+from tools.backup_db import create_db_backup
 
 def background_worker():
     """
@@ -39,16 +40,39 @@ def background_worker():
             set_metadata(session, "next_scheduled_scrape", next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S'))
 
             if should_scrape:
+                # 0. Safety Catch: check if another scrape is already active
+                if get_metadata(session, "is_scrape_in_progress") == "True":
+                    print("[Background Scheduler] Scrape requested but another sync is already in progress. Skipping cycle.")
+                    session.close()
+                    time.sleep(60) # Try again sooner
+                    continue
+
                 print(f"[Background Scheduler] Starting scrape: Interval={interval}h, Days={num_days}")
+                set_metadata(session, "is_scrape_in_progress", "True")
                 print(f"[Background Scheduler] Next run calculated for: {next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 
                 if NOC_USERNAME and NOC_PASSWORD:
+                    # 1. Create a safety backup before any sync
+                    print("[Background Scheduler] Creating safety backup...")
+                    create_db_backup()
+                    
                     scraper = NOCScraper(headless=True)
                     try:
                         scraper.start()
                         if scraper.login(NOC_USERNAME, NOC_PASSWORD):
                             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-                            for i in range(num_days):
+                            
+                            # Deep Sync Logic: once a day, look back 7 days
+                            last_deep = get_metadata(session, "last_deep_sync_date")
+                            current_date_str = today.strftime('%Y-%m-%d')
+                            
+                            start_offset = 0
+                            if last_deep != current_date_str:
+                                print("[Background Scheduler] Daily Deep Sync triggered: Looking back 7 days...")
+                                start_offset = -7
+                                set_metadata(session, "last_deep_sync_date", current_date_str)
+
+                            for i in range(start_offset, num_days):
                                 target_date = today + timedelta(days=i)
                                 print(f"[Background Scheduler] Scraping {target_date.strftime('%Y-%m-%d')}...")
                                 scraper.scrape_date(target_date)
@@ -69,6 +93,7 @@ def background_worker():
                         print(f"[Background Scheduler] Error during scrape: {e}")
                     finally:
                         should_scrape = False
+                        set_metadata(session, "is_scrape_in_progress", "False")
                         scraper.stop()
                 else:
                     print("[Background Scheduler] Missing credentials in config.py, skipping background scrape.")

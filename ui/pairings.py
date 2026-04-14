@@ -15,15 +15,20 @@ def render_pairings_tab():
     col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
     with col1:
         # Get unique pairing numbers
-        pairing_nums = [r[0] for r in session.query(ScheduledFlight.pairing_number).distinct()]
+        pairing_nums = ["All"] + sorted([r[0] for r in session.query(ScheduledFlight.pairing_number).distinct()])
         
-        # Determine Default
-        p_idx = 0
+        # 1. URL/State Sync (Deep-linking)
         p_arg = st.session_state.get("pairing_search_default", "All")
-        if p_arg in pairing_nums:
-            p_idx = (["All"] + sorted(pairing_nums)).index(p_arg)
+        if "pairing_search" not in st.session_state or (p_arg != "All" and st.session_state.get("last_synced_p") != p_arg):
+             if p_arg in pairing_nums:
+                 st.session_state["pairing_search"] = p_arg
+                 st.session_state["last_synced_p"] = p_arg
+
+        sel_pairing = st.selectbox("Filter by Pairing", pairing_nums, key="pairing_search")
         
-        sel_pairing = st.selectbox("Filter by Pairing", ["All"] + sorted(pairing_nums), index=p_idx, key="pairing_search")
+        # Pull selection from key for rest of logic
+        if sel_pairing:
+            st.session_state["last_synced_p"] = sel_pairing
     
     with col2:
         # Get distinct months from ScheduledFlight
@@ -40,14 +45,20 @@ def render_pairings_tab():
         months_set.add(current_month_str)
             
         months = sorted(list(months_set), key=lambda x: datetime.strptime(x, "%B %Y"), reverse=True)
-        default_idx = months.index(current_month_str) if current_month_str in months else 0
         
-        # Use deep link default if present
+        # Deep-link Sync
         m_arg = st.session_state.get("pairing_month_default")
-        if m_arg in months:
-            default_idx = months.index(m_arg)
+        if m_arg and m_arg in months and st.session_state.get("last_synced_m") != m_arg:
+            st.session_state["month_search"] = m_arg
+            st.session_state["last_synced_m"] = m_arg
             
-        sel_month_str = st.selectbox("Filter by Bid Period", months, index=default_idx, key="month_search")
+        if "month_search" not in st.session_state:
+            default_val = current_month_str if current_month_str in months else months[0] if months else None
+            st.session_state["month_search"] = default_val
+
+        sel_month_str = st.selectbox("Filter by Bid Period", months, key="month_search")
+        if sel_month_str:
+            st.session_state["last_synced_m"] = sel_month_str
 
     with col3:
         d_arg = st.session_state.get("pairing_date_default")
@@ -112,7 +123,7 @@ def render_pairings_tab():
             "Trip Start": sf.pairing_start_date.strftime("%Y-%m-%d") if sf.pairing_start_date else "N/A",
             "Leg Date": sf.date.strftime("%Y-%m-%d"),
             "Pairing": f"<a href='/pairings?pairing={sf.pairing_number}&month={p_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{sf.pairing_number}</a>",
-            "Flight": f"<a href='/?date={sf.date.strftime('%Y-%m-%d')}&flight_num={sf.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{sf.flight_number}</a>",
+            "Flight": f"<a href='/historical?date={sf.date.strftime('%Y-%m-%d')}&flight_num={sf.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{sf.flight_number}</a>",
             "Route": f"{sf.departure_airport}-{sf.arrival_airport}",
             "Sch Dep": sf.scheduled_departure,
             "Sch Arr": sf.scheduled_arrival or "N/A",

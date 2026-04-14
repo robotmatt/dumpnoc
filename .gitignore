@@ -313,10 +313,11 @@ __marimo__/
 ioe/
 pairings/
 lcp/   
+backups/
 
-# ignore noc_data.db
-noc_data.db
-noc_data.db-journal
+# ignore database directory
+db/
+dumpnoc.db
 
 .DS_Store
 firestore_key.json
@@ -325,3 +326,4 @@ firestore_key.json
 *.db.bak
 debug_log.txt
 tools/jsp_flights_report.txt
+

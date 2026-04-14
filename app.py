@@ -24,17 +24,21 @@ from ui.pairings import render_pairings_tab
 from ui.ioe import render_ioe_tab
 from ui.sync import render_sync_tab
 from ui.employee import render_employee_tab
+from ui.roster import render_roster_tab
 from ui.settings import render_settings_tab
 
-page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", default=True)
+page_hist = st.Page(render_historical_tab, title="Historical Data", icon="📅", url_path="historical")
 page_pair = st.Page(render_pairings_tab, title="Pairings", icon="📋", url_path="pairings")
 page_ioe = st.Page(render_ioe_tab, title="IOE Audit", icon="🎓", url_path="ioe")
-page_emp = st.Page(render_employee_tab, title="Employee History", icon="👤", url_path="employee")
+page_roster = st.Page(render_roster_tab, title="Roster", icon="🗓️", url_path="roster")
 page_sync = st.Page(render_sync_tab, title="Sync Data", icon="🔄", url_path="sync")
 page_sett = st.Page(render_settings_tab, title="Settings", icon="⚙️", url_path="settings")
 
+# Hidden root redirect to /historical
+page_home = st.Page(lambda: st.switch_page(page_hist), title="Home", default=True)
+
 # Initialize navigation but hide sidebar UI
-pg = st.navigation([page_hist, page_emp, page_pair, page_ioe, page_sync, page_sett], position="hidden")
+pg = st.navigation([page_home, page_hist, page_roster, page_pair, page_ioe, page_sync, page_sett], position="hidden")
 
 # --- Top Header & Navigation ---
 # Using custom CSS to inject title into the top area and style the nav
@@ -65,11 +69,11 @@ st.markdown("""
 <div class="header-title">✈️ NOC Mobile Scraper & Archiver</div>
 """, unsafe_allow_html=True)
 
-nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1.2, 1.2, 1, 1, 1, 1, 1.6])
+nc1, nc2, nc3, nc4, nc5, nc6, n_spacer = st.columns([1, 1.2, 1, 1, 1, 1, 1.6])
 with nc1:
     st.page_link(page_hist, label="Historical Data", icon="📅")
 with nc2:
-    st.page_link(page_emp, label="Employee", icon="👤")
+    st.page_link(page_roster, label="Roster", icon="🗓️")
 with nc3:
     st.page_link(page_pair, label="Pairings", icon="📋")
 with nc4:
@@ -156,26 +160,34 @@ if "emp_id" in query_params:
 if "emp_month" in query_params:
     st.session_state["employee_search_month"] = query_params["emp_month"]
 
+if "year" in query_params:
+    st.session_state["roster_year_default"] = query_params["year"]
+if "month" in query_params:
+    st.session_state["roster_month_default"] = query_params["month"]
+if "hrId" in query_params:
+    st.session_state["roster_hrid_default"] = query_params["hrId"]
+
 # Run the page logic
 pg.run()
 
 # --- Terminal Logs ---
-from logger_util import log_buffer
-st.divider()
-with st.expander("🛠️ Terminal Logs", expanded=False):
-    logs = log_buffer.get_all()
-    if logs:
-        # Show last 100 lines for performance
-        log_text = "\n".join(logs[-100:])
-        st.code(log_text, language="text", wrap_lines=True)
-        col_l, col_r = st.columns([1, 1])
-        with col_l:
-            if st.button("Refresh Logs", key="refresh_logs_sys"):
-                st.rerun()
-        with col_r:
-            if st.button("Clear Logs", key="clear_logs_sys"):
-                log_buffer.buffer.clear()
-                st.rerun()
-    else:
-        st.caption("No logs yet.")
+if pg.title == "Sync Data":
+    from logger_util import log_buffer
+    st.divider()
+    with st.expander("🛠️ Terminal Logs", expanded=False):
+        logs = log_buffer.get_all()
+        if logs:
+            # Show last 100 lines for performance
+            log_text = "\n".join(logs[-100:])
+            st.code(log_text, language="text", wrap_lines=True)
+            col_l, col_r = st.columns([1, 1])
+            with col_l:
+                if st.button("Refresh Logs", key="refresh_logs_sys"):
+                    st.rerun()
+            with col_r:
+                if st.button("Clear Logs", key="clear_logs_sys"):
+                    log_buffer.buffer.clear()
+                    st.rerun()
+        else:
+            st.caption("No logs yet.")
 

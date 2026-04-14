@@ -27,7 +27,7 @@ class Flight(Base):
 
     id = Column(Integer, primary_key=True)
     flight_number = Column(String, index=True) # e.g. "FL123"
-    date = Column(DateTime) # Date of the flight
+    date = Column(DateTime, index=True) # Date of the flight
     
     # Times (Local -Default)
     scheduled_departure = Column(DateTime)
@@ -41,11 +41,26 @@ class Flight(Base):
     actual_departure_utc = Column(DateTime, nullable=True)
     actual_arrival_utc = Column(DateTime, nullable=True)
     
+    actual_out_utc = Column(DateTime, nullable=True)
+    actual_off_utc = Column(DateTime, nullable=True)
+    actual_on_utc = Column(DateTime, nullable=True)
+    actual_in_utc = Column(DateTime, nullable=True)
+    
+    # OOOI and Block Times
+    actual_out = Column(DateTime, nullable=True)
+    actual_off = Column(DateTime, nullable=True)
+    actual_on = Column(DateTime, nullable=True)
+    actual_in = Column(DateTime, nullable=True)
+    planned_block_minutes = Column(Integer, nullable=True)
+    actual_block_minutes = Column(Integer, nullable=True)
+    has_duplicate_warning = Column(Integer, default=0)
+
+    
     # New Fields
     sta_raw = Column(String) # Raw STA string e.g. "0042 : 16DEC25"
-    tail_number = Column(String, nullable=True)
-    departure_airport = Column(String, nullable=True)
-    arrival_airport = Column(String, nullable=True)
+    tail_number = Column(String, nullable=True, index=True)
+    departure_airport = Column(String, nullable=True, index=True)
+    arrival_airport = Column(String, nullable=True, index=True)
     aircraft_type = Column(String, nullable=True)
     version = Column(String, nullable=True)
     status = Column(String, nullable=True)
@@ -65,7 +80,7 @@ class CrewMember(Base):
     __tablename__ = 'crew'
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, unique=True, index=True)
+    name = Column(String, index=True)
     employee_id = Column(String, unique=True, nullable=True)
     
     # Relationships
@@ -130,11 +145,92 @@ def get_metadata(session, key, default=None):
     rec = session.query(AppMetadata).get(key)
     return rec.value if rec else default
 
-engine = create_engine(DB_URL)
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Table, inspect, text, event
+
+engine = create_engine(DB_URL, connect_args={'timeout': 15})
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.close()
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(engine)
+    
+    # Auto-migration: Check for missing columns in 'flights' table
+    inspector = inspect(engine)
+    columns = [col['name'] for col in inspector.get_columns('flights')]
+    
+    # Define columns that might be missing in older versions
+    # Map column name to its SQLAlchemy type string for ALTER TABLE
+    required_columns = {
+        'scheduled_departure_utc': 'DATETIME',
+        'scheduled_arrival_utc': 'DATETIME',
+        'actual_departure_utc': 'DATETIME',
+        'actual_arrival_utc': 'DATETIME',
+        'actual_out_utc': 'DATETIME',
+        'actual_off_utc': 'DATETIME',
+        'actual_on_utc': 'DATETIME',
+        'actual_in_utc': 'DATETIME',
+        'actual_out': 'DATETIME',
+        'actual_off': 'DATETIME',
+        'actual_on': 'DATETIME',
+        'actual_in': 'DATETIME',
+        'planned_block_minutes': 'INTEGER',
+        'actual_block_minutes': 'INTEGER',
+        'has_duplicate_warning': 'INTEGER DEFAULT 0',
+        'sta_raw': 'VARCHAR',
+        'tail_number': 'VARCHAR',
+        'departure_airport': 'VARCHAR',
+        'arrival_airport': 'VARCHAR',
+        'aircraft_type': 'VARCHAR',
+        'version': 'VARCHAR',
+        'status': 'VARCHAR',
+        'pax_data': 'VARCHAR',
+        'load_data': 'VARCHAR',
+        'notes_data': 'VARCHAR'
+    }
+    
+    with engine.connect() as conn:
+        for col_name, col_type in required_columns.items():
+            if col_name not in columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE flights ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+                    print(f"Migration: Added missing column '{col_name}' to 'flights' table.")
+                except Exception as e:
+                    print(f"Migration Error on '{col_name}': {e}")
+                    
+        # Migration: Ensure 'crew.name' is not unique (it might have been in older versions)
+        try:
+            res = conn.execute(text("PRAGMA index_list('crew')"))
+            for row in res:
+                # row[1] is name, row[2] is unique
+                if row[1] == 'ix_crew_name' and row[2] == 1:
+                    print("Migration: Non-uniquifying crew.name index...")
+                    # SQLAlchemy might have created it as unique index
+                    conn.execute(text("DROP INDEX ix_crew_name"))
+                    conn.execute(text("CREATE INDEX ix_crew_name ON crew(name)"))
+                    conn.commit()
+                    print("Migration: crew.name is no longer unique.")
+        except Exception as e:
+            print(f"Migration Error on crew name constraint: {e}")
+            
+        # Add performance indexes
+        try:
+            # We wrap in try to avoid errors if they already exist
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_date ON flights(date)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_dep ON flights(departure_airport)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_arr ON flights(arrival_airport)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_flights_tail ON flights(tail_number)"))
+            conn.commit()
+        except Exception as e:
+            pass
+            
     return engine
 
 def get_session():

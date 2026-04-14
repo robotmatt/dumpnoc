@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime, timedelta
-from database import get_session, get_metadata, DailySyncStatus
+from database import get_session, get_metadata, set_metadata, DailySyncStatus
 from scraper import NOCScraper
 from config import NOC_USERNAME, NOC_PASSWORD
 from firestore_lib import is_cloud_sync_enabled
@@ -16,6 +16,7 @@ def render_sync_tab():
     session = get_session()
     global_last_sync = get_metadata(session, "last_successful_sync")
     last_sync_rec = session.query(DailySyncStatus).order_by(desc(DailySyncStatus.last_scraped_at)).first()
+    is_active = get_metadata(session, "is_scrape_in_progress") == "True"
     session.close()
     
     st.header("Sync Settings")
@@ -27,11 +28,17 @@ def render_sync_tab():
 
     # Cloud Configuration Check (using dynamic setting)
     active_cloud_sync = is_cloud_sync_enabled()
-    
     if active_cloud_sync:
         st.success("✅ Cloud Sync Active")
     else:
          st.warning("⚠️ Cloud Sync Inactive")
+
+    if is_active:
+        st.info("⏳ **Scraper Busy:** A sync operation is currently running (Background or Manual).")
+        with st.expander("📡 Live Scraper Feed", expanded=True):
+            st.code("\n".join(log_buffer.get_last(20)), language="text")
+            if st.button("Refresh Feed"):
+                st.rerun()
 
     st.divider()
     
@@ -51,10 +58,18 @@ def render_sync_tab():
         st.info(f"Will sync data for: **{start_date.strftime('%Y-%m-%d')}**")
     
 
-    if st.button(f"Start Scraper Sync ({sync_mode})", type="primary"):
+    if st.button(f"Start Scraper Sync ({sync_mode})", type="primary", disabled=is_active):
         status_area = st.empty()
         
-        if start_date > end_date:
+        # --- Check for global lock ---
+        session = get_session()
+        is_active = get_metadata(session, "is_scrape_in_progress")
+        session.close()
+
+        if is_active == "True":
+            status_area.error("⚠️ **Sync Blocked:** A background or manual sync is currently in progress. Please wait for it to complete.")
+            st.toast("Sync already running!", icon="🔒")
+        elif start_date > end_date:
             status_area.error("Start date must be before or equal to end date.")
         else:
             status_area.info("Initializing browser...")
@@ -63,6 +78,11 @@ def render_sync_tab():
             scraper = NOCScraper(headless=True) # Ensure this is compatible with your environment
             
             try:
+                # Set Global Lock
+                session = get_session()
+                set_metadata(session, "is_scrape_in_progress", "True")
+                session.close()
+
                 scraper.start()
                 if scraper.login(username, password):
                     status_area.success("Logged in! Scraping dates...")
@@ -98,6 +118,10 @@ def render_sync_tab():
                 status_area.error(f"An error occurred: {e}")
                 st.exception(e) # Show full traceback
             finally:
+                # Release Global Lock
+                session = get_session()
+                set_metadata(session, "is_scrape_in_progress", "False")
+                session.close()
                 scraper.stop()
     
     st.divider()
