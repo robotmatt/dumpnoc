@@ -180,6 +180,9 @@ def render_roster_tab():
 
     active_flights = [f for f in current_flights if f.status != "Canceled"]
     
+    total_month_sch = sum((f.planned_block_minutes or 0) for f in active_flights)
+    total_month_act = sum((f.actual_block_minutes or 0) for f in active_flights)
+    
     # Group Active by day for both UI and PDF
     from collections import defaultdict
     days_map = defaultdict(list)
@@ -200,6 +203,19 @@ def render_roster_tab():
             mime="application/pdf",
             use_container_width=True
         )
+
+    # --- Block Totals ---
+    m_col1, m_col2, m_col3 = st.columns([1, 1, 2])
+    with m_col1:
+        st.metric("Total Scheduled Block", fmt_block(total_month_sch))
+    with m_col2:
+        st.metric("Total Actual Block", fmt_block(total_month_act))
+    with m_col3:
+        # Add a subtle visual indicator of progress if applicable
+        if total_month_sch > 0:
+            pct = min(1.0, total_month_act / total_month_sch) if total_month_sch > 0 else 0
+            st.write(f"Completion: {pct:.1%}")
+            st.progress(pct)
 
     tab_schedule, tab_audit = st.tabs(["📅 Monthly Schedule", "🚫 Removal Audit"])
 
