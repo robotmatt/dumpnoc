@@ -26,7 +26,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(project_root)
 sys.path.append(project_root)
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, or_, and_
 from sqlalchemy.orm import sessionmaker
 
 from database import Flight, CrewMember, flight_crew_association, DB_URL
@@ -38,11 +38,19 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def generate_report(export_csv=False, start_date=None, end_date=None):
     session = SessionLocal()
     try:
-        # 1. Gather all flights that have a crew member with a 'JSP' tag
+        # 1. Gather all flights that have a crew member with a 'FR' or 'LC' tag,
+        # or a 'JSP' tag (but only if they are NOT a First Officer)
         jsp_flights_query = session.query(Flight).join(
             flight_crew_association, Flight.id == flight_crew_association.c.flight_id
         ).filter(
-            flight_crew_association.c.flags.like('%JSP%')
+            or_(
+                flight_crew_association.c.flags.like('%FR%'),
+                flight_crew_association.c.flags.like('%LC%'),
+                and_(
+                    flight_crew_association.c.flags.like('%JSP%'),
+                    flight_crew_association.c.role != 'FO'
+                )
+            )
         )
         
         if start_date:
@@ -55,25 +63,32 @@ def generate_report(export_csv=False, start_date=None, end_date=None):
         flights = jsp_flights_query.all()
         
         if not flights:
-            print("No flights found with JSP tag.")
+            print("No flights found with JSP/FR/LC tags.")
             return
 
-        # 2. Find unique people with JSP tag (excluding trainees with 'T' tag)
+        # 2. Find unique people with qualifying tags (excluding trainees and FO-only JSP)
         jsp_people_query = session.query(CrewMember.name).join(
             flight_crew_association, CrewMember.id == flight_crew_association.c.crew_id
         ).filter(
-            flight_crew_association.c.flags.like('%JSP%'),
+            or_(
+                flight_crew_association.c.flags.like('%FR%'),
+                flight_crew_association.c.flags.like('%LC%'),
+                and_(
+                    flight_crew_association.c.flags.like('%JSP%'),
+                    flight_crew_association.c.role != 'FO'
+                )
+            ),
             ~flight_crew_association.c.flags.like('%T%')
         ).distinct().order_by(CrewMember.name)
         
         jsp_people = [p.name for p in jsp_people_query.all()]
 
-        print(f"Found {len(flights)} flights and {len(jsp_people)} unique people with JSP tag. Generating report...")
+        print(f"Found {len(flights)} flights and {len(jsp_people)} unique people with JSP/FR/LC tags. Generating report...")
 
         # 3. Format the report
         report_content = []
         report_content.append("=" * 80)
-        report_content.append(f"JSP FLIGHT REPORT")
+        report_content.append(f"JSP/FR/LC FLIGHT REPORT")
         report_content.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         if start_date or end_date:
             start_str = start_date.strftime('%Y-%m-%d') if start_date else 'Beginning'
@@ -83,7 +98,7 @@ def generate_report(export_csv=False, start_date=None, end_date=None):
         report_content.append("=" * 80)
         report_content.append("\n")
 
-        report_content.append("UNIQUE PEOPLE WITH JSP TAG:")
+        report_content.append("UNIQUE PEOPLE WITH JSP/FR/LC TAGS:")
         for person in jsp_people:
             report_content.append(f"  - {person}")
         report_content.append("\n" + "=" * 80 + "\n")
@@ -194,7 +209,7 @@ def generate_report(export_csv=False, start_date=None, end_date=None):
         session.close()
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate a report of flights involving crew with a JSP tag.")
+    parser = argparse.ArgumentParser(description="Generate a report of flights involving crew with a JSP, FR, or LC tag.")
     parser.add_argument("--csv", action="store_true", help="Export the data to a CSV file in addition to the text report.")
     parser.add_argument("--start-date", type=lambda d: datetime.strptime(d, '%Y-%m-%d'), help="Start date in YYYY-MM-DD format.")
     parser.add_argument("--end-date", type=lambda d: datetime.strptime(d, '%Y-%m-%d'), help="End date in YYYY-MM-DD format.")
