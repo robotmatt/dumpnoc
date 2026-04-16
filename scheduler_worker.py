@@ -116,6 +116,15 @@ def start_background_scheduler():
     """
     # Use a global variable to track if thread is already started
     if not hasattr(start_background_scheduler, "_thread_started"):
+        # Reset Global Sync Lock on application startup
+        try:
+            session = get_session()
+            set_metadata(session, "is_scrape_in_progress", "False")
+            session.close()
+            print("[Background Scheduler] Global sync lock reset.")
+        except Exception as e:
+            print(f"[Background Scheduler] Failed to reset sync lock: {e}")
+
         worker_thread = threading.Thread(target=background_worker, daemon=True)
         worker_thread.start()
         start_background_scheduler._thread_started = True

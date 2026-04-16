@@ -37,8 +37,17 @@ def render_sync_tab():
         st.info("⏳ **Scraper Busy:** A sync operation is currently running (Background or Manual).")
         with st.expander("📡 Live Scraper Feed", expanded=True):
             st.code("\n".join(log_buffer.get_last(20)), language="text")
-            if st.button("Refresh Feed"):
-                st.rerun()
+            col_l, col_r = st.columns([1, 1])
+            with col_l:
+                if st.button("Refresh Feed", use_container_width=True):
+                    st.rerun()
+            with col_r:
+                if st.button("🚨 Force Reset Sync Lock", use_container_width=True, help="Use this ONLY if the scraper is stuck and no actual progress is being made."):
+                    session = get_session()
+                    set_metadata(session, "is_scrape_in_progress", "False")
+                    session.close()
+                    st.toast("Sync lock cleared!", icon="🔓")
+                    st.rerun()
 
     st.divider()
     
