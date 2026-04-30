@@ -304,10 +304,14 @@ def render_roster_tab():
                         event = "Modified"
                         if in_old and not in_new: event = "🚫 REMOVED"
                         elif not in_old and in_new: event = "🟢 ADDED"
+                        
+                        f_num_display = f_num[2:] if f_num.startswith("C5") else f_num
+                        f_link = f"<a href='/historical?date={f_date.strftime('%Y-%m-%d')}&flight_num={f_num_display}' target='_blank' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num_display}</a>"
+                        
                         audit_rows.append({
                             "Detected At": h.timestamp.strftime('%Y-%m-%d %H:%M'),
                             "Flight Date": f_date.strftime('%Y-%m-%d'),
-                            "Flight": f_num,
+                            "Flight": f_link,
                             "Route": f"{f_dep}-{f_arr}",
                             "Event": event,
                             "Summary": h.description
@@ -317,6 +321,6 @@ def render_roster_tab():
         if not audit_rows:
             st.info("No detailed crew change events detected in flight history.")
         else:
-            st.dataframe(pd.DataFrame(audit_rows), hide_index=True, width="stretch")
+            st.markdown(pd.DataFrame(audit_rows).to_html(escape=False, index=False, classes='dataframe'), unsafe_allow_html=True)
 
     session.close()
