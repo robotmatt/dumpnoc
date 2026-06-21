@@ -1,10 +1,13 @@
-"""
+r"""
 export_crew_flights.py
 
-Usage:
-  python tools/export_crew_flights.py --employee-id 123456
-  python tools/export_crew_flights.py --employee-id 123456 --csv
-  python tools/export_crew_flights.py --employee-id 123456 --start-date 2025-07-01 --end-date 2025-07-31
+Usage (from project root):
+  venv\Scripts\python.exe tools/export_crew_flights.py --employee-id 123456
+  venv\Scripts\python.exe tools/export_crew_flights.py --employee-id 123456 --csv
+  venv\Scripts\python.exe tools/export_crew_flights.py --employee-id 123456 --start-date 2025-07-01 --end-date 2025-07-31
+
+Usage (from tools directory):
+  ..\venv\Scripts\python.exe export_crew_flights.py --employee-id 123456
 
 This script exports every flight a specific crew member did to a text file.
 If the '--csv' flag is provided, it also exports the data to a CSV file.
@@ -95,11 +98,19 @@ def export_flights(employee_id, export_csv=False, start_date=None, end_date=None
             
             report_content.append("-" * 40)
             report_content.append("TIMES:")
-            report_content.append(f"  Sched Out: {f.scheduled_departure.strftime('%H:%M') if f.scheduled_departure else 'N/A'}")
-            report_content.append(f"  Actual Out: {f.actual_departure.strftime('%H:%M') if f.actual_departure else 'N/A'}")
-            report_content.append(f"  Actual In:  {f.actual_arrival.strftime('%H:%M') if f.actual_arrival else 'N/A'}")
+            report_content.append(f"  Planned Dep: {f.scheduled_departure.strftime('%H:%M') if f.scheduled_departure else 'N/A'}")
+            report_content.append(f"  Planned Arr: {f.scheduled_arrival.strftime('%H:%M') if f.scheduled_arrival else 'N/A'}")
+            report_content.append(f"  Actual Out:  {f.actual_out.strftime('%H:%M') if f.actual_out else 'N/A'}")
+            report_content.append(f"  Actual In:   {f.actual_in.strftime('%H:%M') if f.actual_in else 'N/A'}")
             
-            report_content.append(f"  Block Time: {f.actual_block_minutes} mins" if f.actual_block_minutes is not None else "  Block Time: N/A")
+            # Fallback to OOOI Off/On times if Actual Departure/Arrival (ATD/ATA) is null
+            act_dep = f.actual_departure or f.actual_off
+            act_arr = f.actual_arrival or f.actual_on
+            report_content.append(f"  Actual Dep:  {act_dep.strftime('%H:%M') if act_dep else 'N/A'}")
+            report_content.append(f"  Actual Arr:  {act_arr.strftime('%H:%M') if act_arr else 'N/A'}")
+            
+            report_content.append(f"  Sched Block:  {f.planned_block_minutes} mins" if f.planned_block_minutes is not None else "  Sched Block:  N/A")
+            report_content.append(f"  Actual Block: {f.actual_block_minutes} mins" if f.actual_block_minutes is not None else "  Actual Block: N/A")
             
             # Show other crew members
             other_crew = session.execute(
@@ -141,7 +152,9 @@ def export_flights(employee_id, export_csv=False, start_date=None, end_date=None
                 # Write header
                 writer.writerow([
                     "Flight Number", "Date", "Role", "Flags", "Departure", "Arrival", "Status",
-                    "Tail Number", "Aircraft Type", "Scheduled Departure",
+                    "Tail Number", "Aircraft Type", 
+                    "Planned Departure", "Planned Arrival",
+                    "Actual Out", "Actual In",
                     "Actual Departure", "Actual Arrival",
                     "Planned Block (mins)", "Actual Block (mins)", "Other Crew"
                 ])
@@ -174,6 +187,8 @@ def export_flights(employee_id, export_csv=False, start_date=None, end_date=None
                         crew_strs.append(f"{o_role or 'Unknown'}: {name}{o_flag_str}")
                     crew_joined = " | ".join(crew_strs)
 
+                    act_dep = f.actual_departure or f.actual_off
+                    act_arr = f.actual_arrival or f.actual_on
                     writer.writerow([
                         f.flight_number,
                         f.date.strftime('%Y-%m-%d') if f.date else "N/A",
@@ -185,8 +200,11 @@ def export_flights(employee_id, export_csv=False, start_date=None, end_date=None
                         f.tail_number,
                         f.aircraft_type,
                         f.scheduled_departure.strftime('%Y-%m-%d %H:%M') if f.scheduled_departure else "N/A",
-                        f.actual_departure.strftime('%Y-%m-%d %H:%M') if f.actual_departure else "N/A",
-                        f.actual_arrival.strftime('%Y-%m-%d %H:%M') if f.actual_arrival else "N/A",
+                        f.scheduled_arrival.strftime('%Y-%m-%d %H:%M') if f.scheduled_arrival else "N/A",
+                        f.actual_out.strftime('%Y-%m-%d %H:%M') if f.actual_out else "N/A",
+                        f.actual_in.strftime('%Y-%m-%d %H:%M') if f.actual_in else "N/A",
+                        act_dep.strftime('%Y-%m-%d %H:%M') if act_dep else "N/A",
+                        act_arr.strftime('%Y-%m-%d %H:%M') if act_arr else "N/A",
                         f.planned_block_minutes,
                         f.actual_block_minutes,
                         crew_joined
