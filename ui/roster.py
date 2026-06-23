@@ -267,7 +267,8 @@ def render_roster_tab():
                      flight_rows = []
                      for f in day_active:
                          f_num = f.flight_number[2:] if f.flight_number.startswith("C5") else f.flight_number
-                         f_link = f"<a href='/historical?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
+                         dep_code = f.departure_airport.split(" - ")[0].strip() if f.departure_airport else ""
+                         f_link = f"<a href='/historical?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}&dep={dep_code}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
                          flight_rows.append({
                              "Flight": f_link,
                              "Route": f"{f.departure_airport or '??'}-{f.arrival_airport or '??'}",
@@ -306,7 +307,8 @@ def render_roster_tab():
                         elif not in_old and in_new: event = "🟢 ADDED"
                         
                         f_num_display = f_num[2:] if f_num.startswith("C5") else f_num
-                        f_link = f"<a href='/historical?date={f_date.strftime('%Y-%m-%d')}&flight_num={f_num_display}' target='_blank' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num_display}</a>"
+                        dep_code = f_dep.split(" - ")[0].strip() if f_dep else ""
+                        f_link = f"<a href='/historical?date={f_date.strftime('%Y-%m-%d')}&flight_num={f_num_display}&dep={dep_code}' target='_blank' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num_display}</a>"
                         
                         audit_rows.append({
                             "Detected At": h.timestamp.strftime('%Y-%m-%d %H:%M'),

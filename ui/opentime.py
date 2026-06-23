@@ -75,7 +75,8 @@ def render_opentime_tab():
         
         if position not in roles:
             f_num = f.flight_number[2:] if f.flight_number.startswith("C5") else f.flight_number
-            f_link = f"<a href='/historical?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}' target='_blank' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
+            dep_code = f.departure_airport.split(" - ")[0].strip() if f.departure_airport else ""
+            f_link = f"<a href='/historical?date={f.date.strftime('%Y-%m-%d')}&flight_num={f_num}&dep={dep_code}' target='_blank' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{f_num}</a>"
             open_flights.append({
                 "Date": f.date.strftime('%Y-%m-%d'),
                 "Flight": f_link,

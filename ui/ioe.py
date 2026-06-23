@@ -256,7 +256,7 @@ def _render_audit_content(selected_month_str, assignments):
             leg_date = leg.date
             
             # Link Generation for Flight
-            flight_link = f"<a href='/historical?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
+            flight_link = f"<a href='/historical?date={leg_date.strftime('%Y-%m-%d')}&flight_num={leg.flight_number}&dep={leg.departure_airport or ''}' target='_self' style='text-decoration:none; font-weight:bold;'>{leg.flight_number}</a>"
             
             candidates = [str(leg.flight_number), f"C5{leg.flight_number}", f"C{leg.flight_number}"]
             actual = session.query(Flight).filter(
@@ -526,7 +526,8 @@ def _render_audit_content(selected_month_str, assignments):
                         p_link = f"<a href='/pairings?pairing={pairing_num}&month={selected_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{pairing_num}</a>"
                     
                     # Clean flight number for the link
-                    f_link = f"<a href='/?date={flight.date.strftime('%Y-%m-%d')}&flight_num={flight_num_clean}' target='_self' style='text-decoration:none; font-weight:bold;'>{flight.flight_number}</a>"
+                    dep_code = flight.departure_airport.split(" - ")[0].strip() if flight.departure_airport else ""
+                    f_link = f"<a href='/historical?date={flight.date.strftime('%Y-%m-%d')}&flight_num={flight_num_clean}&dep={dep_code}' target='_self' style='text-decoration:none; font-weight:bold;'>{flight.flight_number}</a>"
 
                     # Check if this pairing is in the official IOE assignment list
                     if pairing_num not in assigned_pairings:
