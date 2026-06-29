@@ -8,13 +8,90 @@ from tools.backup_db import create_db_backup
 def render_settings_tab():
     st.header("⚙️ Settings")
     
-    st.subheader("Credentials")
-    username = st.text_input("Username", value=NOC_USERNAME if NOC_USERNAME else "", key="username_input")
-    password = st.text_input("Password", value=NOC_PASSWORD if NOC_PASSWORD else "", type="password", key="password_input")
+    st.subheader("Authentication Settings")
     
-    # Store in session state for pages to access
-    st.session_state["username"] = username
-    st.session_state["password"] = password
+    session = get_session()
+    db_auth_mode = get_metadata(session, "auth_mode", "legacy")
+    session.close()
+
+    auth_mode = st.radio(
+        "Authentication Mode",
+        options=["legacy", "sso"],
+        format_func=lambda x: "Legacy Form (Username/Password)" if x == "legacy" else "Microsoft SSO (Azure AD)",
+        index=0 if db_auth_mode == "legacy" else 1,
+        key="auth_mode_input"
+    )
+    
+    # Save auth_mode to metadata if it changed
+    if auth_mode != db_auth_mode:
+        session = get_session()
+        set_metadata(session, "auth_mode", auth_mode)
+        session.close()
+        st.toast(f"Auth mode updated to {auth_mode.upper()}!", icon="🔄")
+        st.rerun()
+
+    launch_sso = False
+    
+    if auth_mode == "legacy":
+        username = st.text_input("Username", value=NOC_USERNAME if NOC_USERNAME else "", key="username_input")
+        password = st.text_input("Password", value=NOC_PASSWORD if NOC_PASSWORD else "", type="password", key="password_input")
+        
+        # Store in session state for pages to access
+        st.session_state["username"] = username
+        st.session_state["password"] = password
+        
+        import os
+        from config import SESSION_STATE_PATH
+        if os.path.exists(SESSION_STATE_PATH):
+            st.success("✅ Saved session cookies exist (Legacy mode). App will bypass login forms until cookies expire.")
+            if st.button("Clear Saved Cookies / Logout"):
+                try:
+                    os.remove(SESSION_STATE_PATH)
+                    st.toast("Cleared saved cookies!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error clearing cookies: {e}")
+    else:
+        st.info("ℹ️ **Microsoft SSO Mode:** Authentication is handled interactively via a Chromium window. The app will save your session tokens to automate background scraping.")
+        
+        import os
+        from config import SESSION_STATE_PATH
+        session_exists = os.path.exists(SESSION_STATE_PATH)
+        
+        if session_exists:
+            st.success("✅ **Active Microsoft SSO Session Saved**")
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("🔄 Refresh SSO Session (Launch Browser)", use_container_width=True):
+                    launch_sso = True
+            with col2:
+                if st.button("🗑️ Delete Saved Session (Log Out)", use_container_width=True):
+                    try:
+                        os.remove(SESSION_STATE_PATH)
+                        session = get_session()
+                        set_metadata(session, "last_scrape_error", "")
+                        session.close()
+                        st.toast("Saved session deleted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error deleting session file: {e}")
+        else:
+            st.warning("⚠️ **No Active SSO Session found.** Background scheduler cannot scrape until you log in once.")
+            if st.button("🚀 Launch SSO Login Browser", type="primary", use_container_width=True):
+                launch_sso = True
+                
+        if launch_sso:
+            with st.spinner("Opening browser window... Please complete the SSO login and 2FA in the browser. The browser will close itself when done."):
+                from scraper import run_interactive_sso_login
+                success = run_interactive_sso_login(SESSION_STATE_PATH)
+                if success:
+                    session = get_session()
+                    set_metadata(session, "last_scrape_error", "") # Clear error banner
+                    session.close()
+                    st.success("🎉 SSO login completed and session state saved! Scraper is now ready.")
+                    st.rerun()
+                else:
+                    st.error("❌ Login failed or browser was closed before completing login. Please try again.")
 
     st.divider()
     

@@ -4,9 +4,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # URLs
-BASE_URL = 'https://uca.noc.vmc.navblue.cloud/RaidoMobile'
+BASE_URL = os.getenv('NOC_BASE_URL', 'https://uca.noc.vmc.navblue.cloud/RaidoMobile')
 LOGIN_URL = f'{BASE_URL}/Default.aspx'
 STATION_OPS_URL = f'{BASE_URL}/Dialogues/Operations/StationOperations.aspx'
+
+# Auth Config
+AUTH_MODE = os.getenv('AUTH_MODE', 'legacy') # 'legacy' or 'sso'
+SESSION_STATE_PATH = os.getenv('SESSION_STATE_PATH', 'db/session_state.json')
 
 # Database
 DB_NAME = 'db/noc_data.db'

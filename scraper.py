@@ -18,7 +18,7 @@ if os.name == 'nt':
 
 from playwright.sync_api import sync_playwright, TimeoutError
 from bs4 import BeautifulSoup
-from config import LOGIN_URL, STATION_OPS_URL
+from config import LOGIN_URL, STATION_OPS_URL, AUTH_MODE, SESSION_STATE_PATH
 from database import get_session, Flight, CrewMember, flight_crew_association, DailySyncStatus
 
 class NOCScraper:
@@ -26,6 +26,7 @@ class NOCScraper:
         self.headless = headless
         self.playwright = None
         self.browser = None
+        self.context = None
         self.page = None
         self.session = get_session()
 
@@ -50,10 +51,24 @@ class NOCScraper:
             # Silently fail if timezone is not found or invalid
             return None
 
-    def start(self):
+    def start(self, auth_mode=None, storage_state_path=None):
+        if auth_mode is None:
+            auth_mode = AUTH_MODE
+        if storage_state_path is None:
+            storage_state_path = SESSION_STATE_PATH
+
         self.playwright = sync_playwright().start()
         self.browser = self.playwright.chromium.launch(headless=self.headless)
-        self.page = self.browser.new_page()
+        
+        # Check if we should load the storage state
+        if os.path.exists(storage_state_path):
+            print(f"Loading persistent session state from {storage_state_path}...")
+            self.context = self.browser.new_context(storage_state=storage_state_path)
+        else:
+            print("Creating new browser context (no saved session state found)...")
+            self.context = self.browser.new_context()
+            
+        self.page = self.context.new_page()
 
     def stop(self):
         if self.browser:
@@ -62,30 +77,63 @@ class NOCScraper:
             self.playwright.stop()
         self.session.close()
 
-    def login(self, username, password):
-        print(f"Navigating to {LOGIN_URL}...")
+    def save_session(self, path=None):
+        if path is None:
+            path = SESSION_STATE_PATH
+        if self.context:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self.context.storage_state(path=path)
+            print(f"Saved session state to {path}")
+
+    def login(self, username=None, password=None, auth_mode=None, storage_state_path=None):
+        if auth_mode is None:
+            auth_mode = AUTH_MODE
+        if storage_state_path is None:
+            storage_state_path = SESSION_STATE_PATH
+
+        # First, try to verify if current session is already active/valid
+        print("Checking session validity by navigating to Station Operations...")
+        try:
+            self.page.goto(STATION_OPS_URL)
+            self.page.wait_for_load_state("networkidle")
+            
+            # Check if we are on the station ops page and NOT redirected to a login/sign-in page
+            current_url = self.page.url
+            current_title = self.page.title()
+            
+            if "StationOperations.aspx" in current_url and "login" not in current_url.lower() and not ("Login" in current_title or "Sign in" in current_title):
+                print("Session is active and valid (already logged in). Bypassing login step.")
+                return True
+        except Exception as e:
+            print(f"Error checking session validity: {e}")
+
+        # If not already logged in, perform auth based on mode
+        if auth_mode == "sso":
+            print("SSO auth mode is active, but no valid session was found.")
+            if self.headless:
+                print("Cannot perform interactive SSO login in headless mode. Please authenticate via Settings tab.")
+            return False
+
+        # Legacy login flow
+        print(f"Performing legacy login for user: {username}...")
         self.page.goto(LOGIN_URL)
         
-        # Determine selectors - usually id contains 'UserName' and 'Password' in ASP.NET
-        # Fallback to standard inputs if specific IDs vary
         try:
             self.page.wait_for_selector("input[type='password']")
             
             # Fill Username
-            # Try to find input that looks like username
             user_input = self.page.query_selector("input[name*='UserName']") or \
                          self.page.query_selector("input[id*='UserName']")
             if user_input:
                 user_input.fill(username)
             else:
                 print("Could not find username field by name/id, trying generic...")
-                self.page.fill("input[type='text']", username) # Risky if multiple
+                self.page.fill("input[type='text']", username)
 
             # Fill Password
             self.page.fill("input[type='password']", password)
             
             # Click Login
-            # Look for submit button
             login_btn = self.page.query_selector("input[type='submit']") or \
                         self.page.query_selector("button:has-text('Login')")
             
@@ -101,12 +149,14 @@ class NOCScraper:
                 print("Login failed or still on login page.")
                 return False
             
-            print("Login successful.")
+            print("Login successful. Saving session state...")
+            self.save_session(storage_state_path)
             return True
 
         except Exception as e:
-            print(f"Error during login: {e}")
+            print(f"Error during legacy login: {e}")
             return False
+
 
     def scrape_date_range(self, start_date, end_date):
         current_date = start_date
@@ -743,3 +793,71 @@ class NOCScraper:
             return date_obj.replace(hour=h, minute=m, second=0, microsecond=0)
         except:
             return None
+
+
+def run_interactive_sso_login(storage_state_path=None):
+    if storage_state_path is None:
+        storage_state_path = SESSION_STATE_PATH
+        
+    print("Launching interactive SSO login browser...")
+    scraper = NOCScraper(headless=False)
+    try:
+        scraper.start(auth_mode="sso", storage_state_path=storage_state_path)
+        
+        # Navigate to STATION_OPS_URL directly.
+        # This will redirect the user to Microsoft's login/SSO flow.
+        print(f"Navigating browser to: {STATION_OPS_URL}")
+        scraper.page.goto(STATION_OPS_URL)
+        
+        # We poll to see if the user has successfully logged in
+        success = False
+        # Limit to 5 minutes (300 seconds)
+        for i in range(300):
+            if scraper.page.is_closed() or not scraper.browser.contexts:
+                print("Browser was closed by the user.")
+                break
+                
+            try:
+                url = scraper.page.url
+                title = scraper.page.title()
+                print(f"[SSO Polling {i}s] Current URL: {url} | Title: {title}")
+                
+                # Check if we successfully loaded the Station Operations page
+                is_on_ops = "StationOperations.aspx" in url and "login" not in url.lower() and not ("Login" in title or "Sign in" in title)
+                ops_el_visible = False
+                try:
+                    if scraper.page.query_selector("#MasterMain_TimeMode_DP_TimeModes") or scraper.page.query_selector("#MasterMain_tbDate_DateFieldTextBox"):
+                        ops_el_visible = True
+                except:
+                    pass
+                
+                if is_on_ops or ops_el_visible:
+                    print("SSO Login detected! Saving session state...")
+                    scraper.page.wait_for_timeout(3000) # Give 3s to settle cookies
+                    scraper.save_session(storage_state_path)
+                    success = True
+                    break
+                
+                # If they are logged in but got sent to another page (like HumanResourceRoster.aspx or Default.aspx), redirect them to Station Operations
+                is_on_navblue = "navblue.cloud/RaidoMobile" in url and "login" not in url.lower() and "microsoft" not in url.lower() and not ("Login" in title or "Sign in" in title)
+                if is_on_navblue and not is_on_ops and not ops_el_visible:
+                    password_input = scraper.page.query_selector("input[type='password']")
+                    if not password_input:
+                        print(f"User appears logged in on page: {url}. Programmatically redirecting to Station Operations...")
+                        scraper.page.goto(STATION_OPS_URL)
+                        scraper.page.wait_for_load_state("networkidle")
+            except Exception as e:
+                # Browser might be closed or context lost transiently
+                pass
+                
+            scraper.page.wait_for_timeout(1000)
+            
+        return success
+    except Exception as e:
+        print(f"Error during interactive SSO login: {e}")
+        return False
+    finally:
+        try:
+            scraper.stop()
+        except:
+            pass
