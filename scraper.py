@@ -286,8 +286,7 @@ class NOCScraper:
             elif crew.name != c_name:
                 crew.name = c_name
                 changed = True
-            if changed:
-                self.session.flush()
+            # Defer flush; session is committed once after all flights are processed
                 
         if c_id: self._crew_cache_by_id[c_id] = crew
         if c_name: self._crew_cache_by_name[c_name] = crew
@@ -404,7 +403,7 @@ class NOCScraper:
         
         # Track processed flights in this specific session to avoid double-parsing crew (Dep/Arr panels)
         processed_flights_in_session = set()
-        seen_ids = []
+        seen_ids = set()
         
         for item, panel_type in list_items_with_type:
             try:
@@ -703,8 +702,8 @@ class NOCScraper:
                                 setattr(existing, attr, new_val)
                         
                         flight_key = (flight_number, flight_date, dep_apt, arr_apt)
-                        if existing and existing.id not in seen_ids:
-                             seen_ids.append(existing.id)
+                        if existing:
+                             seen_ids.add(existing.id)
                              
                         if flight_key not in processed_flights_in_session:
                             processed_flights_in_session.add(flight_key)
@@ -774,7 +773,7 @@ class NOCScraper:
                         existing.scheduled_departure_utc = parsed_std
                         existing.scheduled_arrival_utc = parsed_sta
                     
-                    self.session.commit() # Save progress for this specific flight leg
+                    self.session.flush() # Stage changes; commit happens once after all flights
                     
                 except Exception as e:
                     print(f"Error during database sync for item: {e}")
@@ -782,6 +781,7 @@ class NOCScraper:
             except Exception as e:
                 print(f"Error parsing flight item structure: {e}")
                 
+        self.session.commit() # Single commit for the entire scrape run — much faster than per-flight
         print(f"Data saved to database ({mode}).")
         return seen_ids
 

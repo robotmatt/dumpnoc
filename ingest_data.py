@@ -568,6 +568,19 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
         
     flights = query.all()
     
+    # Pre-load ALL crew association rows for these flights in one query (avoids N+1)
+    from database import flight_crew_association
+    flight_ids = [f.id for f in flights]
+    assoc_map = {}
+    if flight_ids:
+        assoc_rows = session.execute(
+            flight_crew_association.select().where(
+                flight_crew_association.c.flight_id.in_(flight_ids)
+            )
+        ).fetchall()
+        for row in assoc_rows:
+            assoc_map[(row.flight_id, row.crew_id)] = row
+    
     # Group by date
     daily_bundles = {}
     for f in flights:
@@ -595,15 +608,7 @@ def upload_flights_to_cloud(session, start_date=None, end_date=None):
         # Add basic crew info
         crew_list = []
         for c in f.crew_members:
-            # We need to query the association to get role and flags
-            from database import flight_crew_association
-            assoc = session.execute(
-                flight_crew_association.select().where(
-                    (flight_crew_association.c.flight_id == f.id) &
-                    (flight_crew_association.c.crew_id == c.id)
-                )
-            ).fetchone()
-            
+            assoc = assoc_map.get((f.id, c.id))
             crew_list.append({
                 "name": c.name, 
                 "id": c.employee_id,
