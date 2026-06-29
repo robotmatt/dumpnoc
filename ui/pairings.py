@@ -123,7 +123,7 @@ def render_pairings_tab():
             "Trip Start": sf.pairing_start_date.strftime("%Y-%m-%d") if sf.pairing_start_date else "N/A",
             "Leg Date": sf.date.strftime("%Y-%m-%d"),
             "Pairing": f"<a href='/pairings?pairing={sf.pairing_number}&month={p_month_str}' target='_self' style='text-decoration:none; font-weight:bold; color:#E694FF;'>{sf.pairing_number}</a>",
-            "Flight": f"<a href='/historical?date={sf.date.strftime('%Y-%m-%d')}&flight_num={sf.flight_number}' target='_self' style='text-decoration:none; font-weight:bold;'>{sf.flight_number}</a>",
+            "Flight": f"<a href='/historical?date={sf.date.strftime('%Y-%m-%d')}&flight_num={sf.flight_number}&dep={sf.departure_airport or ''}' target='_self' style='text-decoration:none; font-weight:bold;'>{sf.flight_number}</a>",
             "Route": f"{sf.departure_airport}-{sf.arrival_airport}",
             "Sch Dep": sf.scheduled_departure,
             "Sch Arr": sf.scheduled_arrival or "N/A",

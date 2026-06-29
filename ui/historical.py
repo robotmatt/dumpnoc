@@ -81,16 +81,52 @@ def render_historical_tab():
                 # Sync to URL
                 if query_params.get("flight_num") != selected_flight_val:
                     st.query_params.update(date=view_date.strftime("%Y-%m-%d"), flight_num=selected_flight_val)
+                    if "dep" in st.query_params:
+                        del st.query_params["dep"]
                 
                 # Query full object
                 session = get_session()
                 candidates = [selected_flight_val, f"C5{selected_flight_val}", f"C{selected_flight_val}"]
                 
-                detailed_flight = session.query(Flight).filter(
+                matching_flights = session.query(Flight).filter(
                     Flight.flight_number.in_(candidates),
                     Flight.date >= view_dt, 
                     Flight.date < view_dt + timedelta(days=1)
-                ).first()
+                ).all()
+                
+                detailed_flight = None
+                if matching_flights:
+                    selected_leg_idx = 0
+                    if len(matching_flights) > 1:
+                        # Auto-select based on dep parameter if present
+                        url_dep = st.query_params.get("dep", "")
+                        if url_dep:
+                            for idx, f in enumerate(matching_flights):
+                                dep_clean = f.departure_airport.split(" - ")[0].strip() if f.departure_airport else ""
+                                if dep_clean.upper() == url_dep.upper():
+                                    selected_leg_idx = idx
+                                    break
+                        
+                        leg_options = []
+                        for f in matching_flights:
+                            dep_clean = f.departure_airport.split(" - ")[0].strip() if f.departure_airport else "???"
+                            arr_clean = f.arrival_airport.split(" - ")[0].strip() if f.arrival_airport else "???"
+                            leg_options.append(f"{dep_clean} ➔ {arr_clean}")
+                        
+                        selected_leg_str = st.radio(
+                            "Select Leg / Segment",
+                            options=leg_options,
+                            index=selected_leg_idx,
+                            horizontal=True
+                        )
+                        selected_leg_idx = leg_options.index(selected_leg_str)
+                    
+                    detailed_flight = matching_flights[selected_leg_idx]
+                    
+                    # Update URL dep parameter to match the selected one
+                    chosen_dep = detailed_flight.departure_airport.split(" - ")[0].strip() if detailed_flight.departure_airport else ""
+                    if chosen_dep and st.query_params.get("dep") != chosen_dep:
+                        st.query_params.update(dep=chosen_dep)
                 
                 if detailed_flight:
                     st.subheader(f"✈️ Flight {detailed_flight.flight_number}")
@@ -361,7 +397,7 @@ def render_historical_tab():
             
             # Create the link HTML
             display_df['Flight #'] = display_df.apply(
-                lambda r: f"<a href='/historical?date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
+                lambda r: f"<a href='/historical?date={view_dt.strftime('%Y-%m-%d')}&flight_num={clean_fn(r['flight_number'])}&dep={r['departure_airport'].split(' - ')[0].strip() if r['departure_airport'] else ''}' target='_self' style='text-decoration:none; font-weight:bold; color:#60B4FF;'>{clean_fn(r['flight_number'])}</a>", 
                 axis=1
             )
             

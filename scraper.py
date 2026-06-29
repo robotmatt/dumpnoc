@@ -652,7 +652,7 @@ class NOCScraper:
                                 changes[label] = {"old": str(old_val) if old_val is not None else None, "new": str(new_val) if new_val is not None else None}
                                 setattr(existing, attr, new_val)
                         
-                        flight_key = (flight_number, flight_date)
+                        flight_key = (flight_number, flight_date, dep_apt, arr_apt)
                         if existing and existing.id not in seen_ids:
                              seen_ids.append(existing.id)
                              
