@@ -4,7 +4,8 @@ import threading
 from datetime import datetime, timedelta
 from database import get_session, get_metadata, set_metadata
 from scraper import NOCScraper
-from config import SCRAPE_INTERVAL_HOURS, SCRAPE_DAYS, NOC_USERNAME, NOC_PASSWORD
+from config import SCRAPE_INTERVAL_HOURS, SCRAPE_DAYS, NOC_USERNAME, NOC_PASSWORD, SESSION_STATE_PATH
+import os
 from tools.backup_db import create_db_backup
 
 def background_worker():
@@ -51,15 +52,23 @@ def background_worker():
                 set_metadata(session, "is_scrape_in_progress", "True")
                 print(f"[Background Scheduler] Next run calculated for: {next_scrape_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 
-                if NOC_USERNAME and NOC_PASSWORD:
+                auth_mode = get_metadata(session, "auth_mode", "legacy")
+                has_sso_session = auth_mode == "sso" and os.path.exists(SESSION_STATE_PATH)
+                has_legacy_credentials = auth_mode == "legacy" and NOC_USERNAME and NOC_PASSWORD
+                has_legacy_session = auth_mode == "legacy" and os.path.exists(SESSION_STATE_PATH)
+                
+                if has_sso_session or has_legacy_credentials or has_legacy_session:
                     # 1. Create a safety backup before any sync
                     print("[Background Scheduler] Creating safety backup...")
                     create_db_backup()
                     
                     scraper = NOCScraper(headless=True)
                     try:
-                        scraper.start()
-                        if scraper.login(NOC_USERNAME, NOC_PASSWORD):
+                        scraper.start(auth_mode=auth_mode, storage_state_path=SESSION_STATE_PATH)
+                        if scraper.login(username=NOC_USERNAME, password=NOC_PASSWORD, auth_mode=auth_mode, storage_state_path=SESSION_STATE_PATH):
+                            # Clear last scrape error on successful login
+                            set_metadata(session, "last_scrape_error", "")
+                            
                             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                             
                             # Deep Sync Logic: once a day, look back 7 days
@@ -88,15 +97,25 @@ def background_worker():
                             should_scrape = False
                         else:
                             print("[Background Scheduler] Login failed.")
+                            if auth_mode == "sso":
+                                set_metadata(session, "last_scrape_error", "Microsoft SSO session has expired or is invalid. Please log in again in the Settings tab.")
+                            else:
+                                set_metadata(session, "last_scrape_error", "Legacy login failed. Please verify credentials in the Settings tab.")
                             should_scrape = False
                     except Exception as e:
                         print(f"[Background Scheduler] Error during scrape: {e}")
+                        set_metadata(session, "last_scrape_error", f"Scrape error: {str(e)}")
                     finally:
                         should_scrape = False
                         set_metadata(session, "is_scrape_in_progress", "False")
                         scraper.stop()
                 else:
-                    print("[Background Scheduler] Missing credentials in config.py, skipping background scrape.")
+                    if auth_mode == "sso":
+                        print("[Background Scheduler] Missing active SSO session. Please log in interactively first.")
+                        set_metadata(session, "last_scrape_error", "Missing Microsoft SSO session. Please log in once in the Settings tab.")
+                    else:
+                        print("[Background Scheduler] Missing legacy credentials or saved session, skipping background scrape.")
+                        set_metadata(session, "last_scrape_error", "Missing legacy credentials. Please set them in the Settings tab or .env file.")
             else:
                 # Console debug info
                 time_to_wait = next_scrape_dt - datetime.now()

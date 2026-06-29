@@ -3,7 +3,8 @@ import streamlit as st
 from datetime import datetime, timedelta
 from database import get_session, get_metadata, set_metadata, DailySyncStatus
 from scraper import NOCScraper
-from config import NOC_USERNAME, NOC_PASSWORD
+from config import NOC_USERNAME, NOC_PASSWORD, SESSION_STATE_PATH
+import os
 from firestore_lib import is_cloud_sync_enabled
 from sqlalchemy import desc
 from logger_util import log_buffer
@@ -84,6 +85,10 @@ def render_sync_tab():
             status_area.info("Initializing browser...")
             progress_bar = st.progress(0)
             
+            session = get_session()
+            auth_mode = get_metadata(session, "auth_mode", "legacy")
+            session.close()
+
             scraper = NOCScraper(headless=True) # Ensure this is compatible with your environment
             
             try:
@@ -92,8 +97,13 @@ def render_sync_tab():
                 set_metadata(session, "is_scrape_in_progress", "True")
                 session.close()
 
-                scraper.start()
-                if scraper.login(username, password):
+                scraper.start(auth_mode=auth_mode, storage_state_path=SESSION_STATE_PATH)
+                if scraper.login(username=username, password=password, auth_mode=auth_mode, storage_state_path=SESSION_STATE_PATH):
+                    # Clear any scrape error banner on successful login
+                    session = get_session()
+                    set_metadata(session, "last_scrape_error", "")
+                    session.close()
+                    
                     status_area.success("Logged in! Scraping dates...")
                     
                     # Iterate

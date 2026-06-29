@@ -89,6 +89,13 @@ with nc7:
 
 st.divider()
 
+# Check for scraping errors (e.g., session expired) and show global banner
+session = get_session()
+last_scrape_err = get_metadata(session, "last_scrape_error")
+session.close()
+if last_scrape_err:
+    st.error(f"⚠️ **Scraper Notification:** {last_scrape_err}")
+
 # Global CSS for table styling (continued)
 st.markdown("""
 <style>
