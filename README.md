@@ -73,7 +73,11 @@ playwright install chromium
 ### 2. Environment Variables (`.env`)
 Create a `.env` file in the root directory to store credentials and configurations:
 ```env
-# NOC Mobile Credentials
+# NOC Mobile URL (Optional: Default is production. Use UAT for testing)
+# For UAT: NOC_BASE_URL=https://uca-uat.noc.vmc.navblue.cloud/RaidoMobile
+# For Prod: NOC_BASE_URL=https://uca.noc.vmc.navblue.cloud/RaidoMobile
+
+# NOC Mobile Credentials (Required for Legacy auth; optional for SSO mode)
 NOC_USERNAME=your_username
 NOC_PASSWORD=your_password
 
